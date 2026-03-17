@@ -1,0 +1,1328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Paper Trading Platform</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Outfit',system-ui,sans-serif;background:#0c1222;color:#e2e8f0;min-height:100vh}
+::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.1);border-radius:3px}
+.mono{font-family:'JetBrains Mono','Fira Code',monospace}
+.header{border-bottom:1px solid rgba(255,255,255,0.06);padding:12px 24px;display:flex;justify-content:space-between;align-items:center;background:rgba(255,255,255,0.02)}
+.header-left{display:flex;align-items:center;gap:16px}.header-right{display:flex;gap:12px;align-items:center}
+.logo{font-size:18px;font-weight:800;letter-spacing:-0.5px}.logo-icon{color:#3b82f6}
+.tab-bar{border-bottom:1px solid rgba(255,255,255,0.06);padding:0 24px;display:flex;gap:0;overflow-x:auto}
+.tab{padding:12px 20px;cursor:pointer;font-size:13px;font-weight:600;color:#64748b;border-bottom:2px solid transparent;transition:all 0.15s;white-space:nowrap;user-select:none}
+.tab:hover{color:#94a3b8}.tab.active{color:#3b82f6;border-bottom-color:#3b82f6}
+.content{padding:24px;max-width:1400px;margin:0 auto}
+.badge{padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;letter-spacing:0.5px;display:inline-block}
+.btn{border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;padding:8px 16px;transition:all 0.15s;font-family:inherit}
+.btn:disabled{opacity:0.5;cursor:not-allowed}.btn-sm{font-size:12px;padding:5px 10px}
+.btn-primary{background:#3b82f6;color:#fff}.btn-success{background:#22c55e;color:#fff}.btn-danger{background:#ef4444;color:#fff}
+.btn-amber{background:#f59e0b;color:#000}.btn-ghost{background:rgba(255,255,255,0.06);color:#94a3b8;border:1px solid rgba(255,255,255,0.1)}
+.btn:hover:not(:disabled){filter:brightness(1.1)}
+.card{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:10px;padding:20px}
+.card-title{font-size:15px;font-weight:700;margin-bottom:16px;color:#e2e8f0}
+.card-subtitle{font-size:13px;font-weight:600;margin-bottom:12px;color:#94a3b8}
+.input-group{display:flex;flex-direction:column;gap:4px}
+.input-label{font-size:11px;color:#94a3b8;font-weight:500;text-transform:uppercase;letter-spacing:1px}
+.input-field{background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:6px;padding:8px 12px;color:#e2e8f0;font-size:13px;font-family:'JetBrains Mono',monospace;outline:none;transition:border-color 0.15s}
+.input-field:focus{border-color:rgba(59,130,246,0.5)}
+select.input-field{font-family:'Outfit',system-ui}
+.stat-card{flex:1;min-width:150px}
+.stat-label{font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+.stat-value{font-size:22px;font-weight:700;font-family:'JetBrains Mono',monospace}
+.stat-sub{font-size:12px;margin-top:4px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:right;padding:10px 12px;color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid rgba(255,255,255,0.08);font-weight:600}
+th:first-child{text-align:left}
+td{text-align:right;padding:10px 12px;color:#e2e8f0;white-space:nowrap;border-bottom:1px solid rgba(255,255,255,0.04)}
+td:first-child{text-align:left}td.mono-cell{font-family:'JetBrains Mono',monospace}
+tr.clickable{cursor:pointer}tr.clickable:hover{background:rgba(255,255,255,0.03)}
+.empty-row td{text-align:center;padding:30px;color:#475569}
+.flex{display:flex}.flex-col{flex-direction:column}.flex-wrap{flex-wrap:wrap}
+.gap-4{gap:4px}.gap-8{gap:8px}.gap-12{gap:12px}.gap-16{gap:16px}.gap-20{gap:20px}
+.items-center{align-items:center}.items-end{align-items:flex-end}.justify-between{justify-content:space-between}
+.mb-8{margin-bottom:8px}.mb-12{margin-bottom:12px}.mb-16{margin-bottom:16px}.mt-8{margin-top:8px}.mt-12{margin-top:12px}
+.green{color:#22c55e}.red{color:#ef4444}.blue{color:#3b82f6}.muted{color:#64748b}
+.bold{font-weight:700}.overflow-x{overflow-x:auto}.text-sm{font-size:12px}.text-xs{font-size:11px}
+.status-msg{margin-top:12px;padding:10px 14px;border-radius:6px;font-size:13px}
+.status-error{background:rgba(239,68,68,0.1);color:#ef4444}.status-success{background:rgba(34,197,94,0.1);color:#22c55e}
+.user-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;gap:32px;padding:40px}
+.user-screen .logo-big{font-size:36px;font-weight:800;letter-spacing:-1px;margin-bottom:8px}
+.user-card{width:100%;max-width:500px}
+.portfolio-option{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-radius:8px;cursor:pointer;margin-bottom:8px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);transition:all 0.15s}
+.portfolio-option:hover{border-color:rgba(59,130,246,0.5)}
+canvas.chart{width:100%;height:200px}
+.lot-selector{background:rgba(255,255,255,0.02);border-radius:8px;padding:12px;border:1px solid rgba(255,255,255,0.06)}
+.lot-item{display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;font-size:13px}
+.lot-item input[type="checkbox"]{accent-color:#3b82f6}
+.pie-legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.pie-legend-item{display:flex;align-items:center;gap:4px;font-size:11px;color:#94a3b8}
+.pie-legend-dot{width:8px;height:8px;border-radius:50%}
+.backup-banner{background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.3);border-radius:8px;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+.backup-banner-text{font-size:13px;color:#93c5fd}
+.settle-banner{background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:14px 20px;margin-bottom:16px}
+.settle-banner-text{font-size:13px;color:#fbbf24}
+.backup-info{background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:12px 16px;margin-top:12px}
+.backup-info-row{display:flex;justify-content:space-between;padding:4px 0;font-size:12px}
+.backup-info-label{color:#64748b}.backup-info-value{color:#e2e8f0;font-family:'JetBrains Mono',monospace}
+#app{min-height:100vh}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<input type="file" id="backup-file-input" accept=".json" style="display:none" onchange="handleBackupImport(event)">
+
+<script>
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+const GREEN="#22c55e",RED="#ef4444",BLUE="#3b82f6",AMBER="#f59e0b";
+const COLORS_PIE=["#3b82f6","#8b5cf6","#ec4899","#f59e0b","#22c55e","#06b6d4","#f97316","#6366f1","#14b8a6","#e11d48","#84cc16","#a855f7","#0ea5e9","#d946ef","#facc15","#fb923c","#2dd4bf","#f43f5e","#4ade80","#818cf8"];
+const TABS=["Dashboard","Trade","Positions","Closed","Orders","History","Settings"];
+const gid=()=>Math.random().toString(36).substr(2,12)+Date.now().toString(36);
+const fmt=(n,d=2)=>n==null||isNaN(n)?"—":Number(n).toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d});
+const fmtPct=(n)=>n==null||isNaN(n)?"—":(n>=0?"+":"")+fmt(n*100,2)+"%";
+const fmtUsd=(n)=>n==null||isNaN(n)?"—":"$"+fmt(Math.abs(n));
+const fmtPL=(n)=>n==null||isNaN(n)?"—":(n>=0?"+$":"-$")+fmt(Math.abs(n));
+const plC=(n)=>n>0?GREEN:n<0?RED:"#94a3b8";
+const td=()=>new Date().toISOString().split("T")[0];
+const esc=(s)=>{const d=document.createElement('div');d.textContent=String(s||'');return d.innerHTML};
+
+// ============================================================================
+// FIREBASE INIT
+// ============================================================================
+const firebaseConfig={
+  apiKey:"AIzaSyA0NWhwvJxuk2aiaL5xtjZB-k_aZeeSjZg",
+  authDomain:"paperport-8cd1e.firebaseapp.com",
+  databaseURL:"https://paperport-8cd1e-default-rtdb.firebaseio.com",
+  projectId:"paperport-8cd1e",
+  storageBucket:"paperport-8cd1e.firebasestorage.app",
+  messagingSenderId:"114760712997",
+  appId:"1:114760712997:web:b77b41a64af9e9dad150cc"
+};
+firebase.initializeApp(firebaseConfig);
+const db=firebase.database();
+let _fbSaveTimer=null;
+let _fbInitialized=false;
+let _fbSyncing=false;
+
+// ============================================================================
+// STATE
+// ============================================================================
+let APP=null,PORTFOLIOS={},activeTab="Dashboard";
+
+function getDefaultState(){
+  return{users:{},activeUserId:null,settings:{finnhubKey:"",fmpKey:"",slippageBps:3,autoBackup:true,autoBackupAfterTrades:true},prices:{},aliases:{},lastBackupDate:null,tradesSinceBackup:0};
+}
+function getDefaultPortfolio(cap){
+  return{cash:cap,startingCapital:cap,lots:[],trades:[],orders:[],dividends:[],corporateActions:[],snapshots:[],benchmarks:["SPY","QQQ"],benchmarkPrices:{}};
+}
+
+// Save to both localStorage (fast cache) and Firebase (cloud persistence)
+function saveAll(isTrade=false){
+  try{
+    if(isTrade)APP.tradesSinceBackup=(APP.tradesSinceBackup||0)+1;
+    // Local cache (instant)
+    localStorage.setItem("paper-trading-v4",JSON.stringify({app:APP,portfolios:PORTFOLIOS}));
+    // Firebase (debounced to avoid excessive writes)
+    if(_fbSaveTimer)clearTimeout(_fbSaveTimer);
+    _fbSaveTimer=setTimeout(()=>{
+      _fbSyncing=true;
+      db.ref("data").set({app:APP,portfolios:PORTFOLIOS,lastSaved:new Date().toISOString()}).then(()=>{
+        _fbSyncing=false;console.log("Saved to Firebase");
+      }).catch(e=>{_fbSyncing=false;console.error("Firebase save failed:",e)});
+    },isTrade?500:2000); // save faster after trades
+    // Auto-backup download
+    if(APP.settings.autoBackup&&isTrade){
+      const now=td();
+      if(!APP.lastBackupDate||APP.lastBackupDate!==now||(APP.settings.autoBackupAfterTrades&&APP.tradesSinceBackup>=5))downloadBackup(true);
+    }
+  }catch(e){console.error("Save failed",e)}
+}
+
+// Load: try Firebase first, fall back to localStorage
+async function loadFromFirebase(){
+  try{
+    const snapshot=await db.ref("data").once("value");
+    const data=snapshot.val();
+    if(data&&data.app){
+      APP=data.app;PORTFOLIOS=data.portfolios||{};
+      // Update local cache
+      localStorage.setItem("paper-trading-v4",JSON.stringify({app:APP,portfolios:PORTFOLIOS}));
+      console.log("Loaded from Firebase");
+      return true;
+    }
+  }catch(e){console.error("Firebase load failed:",e)}
+  return false;
+}
+
+function loadFromLocalStorage(){
+  try{
+    const raw=localStorage.getItem("paper-trading-v4")||localStorage.getItem("paper-trading-v3");
+    if(raw){const d=JSON.parse(raw);APP=d.app;PORTFOLIOS=d.portfolios||{};return true;}
+  }catch(e){console.error("LocalStorage load failed:",e)}
+  return false;
+}
+
+// Listen for real-time changes from other devices
+function startFirebaseSync(){
+  db.ref("data").on("value",(snapshot)=>{
+    if(_fbSyncing)return; // ignore our own writes
+    const data=snapshot.val();
+    if(!data||!data.app)return;
+    // Check if this is newer data from another device
+    const currentLocal=localStorage.getItem("paper-trading-v4");
+    const localParsed=currentLocal?JSON.parse(currentLocal):null;
+    if(data.lastSaved&&localParsed){
+      // Only update if Firebase data is newer
+      APP=data.app;PORTFOLIOS=data.portfolios||{};
+      localStorage.setItem("paper-trading-v4",JSON.stringify({app:APP,portfolios:PORTFOLIOS}));
+      console.log("Synced from another device");
+      render();
+    }
+  });
+}
+
+// ============================================================================
+// BACKUP SYSTEM
+// ============================================================================
+function downloadBackup(isAuto=false){
+  const data=JSON.stringify({app:APP,portfolios:PORTFOLIOS,backupDate:new Date().toISOString(),version:"3.0"},null,isAuto?0:2);
+  const blob=new Blob([data],{type:"application/json"});const url=URL.createObjectURL(blob);const a=document.createElement("a");
+  const userName=APP.activeUserId?(APP.users[APP.activeUserId]?.name||"portfolio"):"portfolio";
+  a.href=url;a.download=`paper-trading-backup-${userName}-${td()}.json`;a.click();URL.revokeObjectURL(url);
+  APP.lastBackupDate=td();APP.tradesSinceBackup=0;
+  try{localStorage.setItem("paper-trading-v4",JSON.stringify({app:APP,portfolios:PORTFOLIOS}))}catch(e){}
+}
+function handleBackupImport(event){
+  const file=event.target.files[0];if(!file)return;
+  const reader=new FileReader();
+  reader.onload=function(e){
+    try{
+      const data=JSON.parse(e.target.result);
+      if(!data.app||!data.portfolios){alert("Invalid backup file.");return;}
+      if(!confirm(`Restore backup from ${data.backupDate?new Date(data.backupDate).toLocaleDateString():'unknown date'}?\n\nThis replaces ALL current data.\n\nUsers: ${Object.values(data.app.users||{}).map(u=>u.name).join(', ')||'none'}`))return;
+      APP=data.app;PORTFOLIOS=data.portfolios;
+      if(!APP.settings.fmpKey)APP.settings.fmpKey="";
+      saveAll();render();
+    }catch(err){alert("Failed to parse: "+err.message)}
+  };reader.readAsText(file);event.target.value="";
+}
+function triggerBackupImport(){document.getElementById("backup-file-input").click()}
+function getBackupStatus(){
+  const lb=APP.lastBackupDate,tr=APP.tradesSinceBackup||0;
+  if(!lb)return{status:"never",msg:"Never backed up",color:RED};
+  const ds=Math.floor((Date.now()-new Date(lb).getTime())/86400000);
+  if(ds===0&&tr<5)return{status:"ok",msg:`Backed up today (${tr} trades since)`,color:GREEN};
+  if(ds<=1)return{status:"ok",msg:`Backed up ${ds===0?'today':'yesterday'} (${tr} trades since)`,color:GREEN};
+  if(ds<=7)return{status:"warn",msg:`Last backup ${ds} days ago (${tr} trades since)`,color:AMBER};
+  return{status:"stale",msg:`Last backup ${ds} days ago (${tr} trades since)`,color:RED};
+}
+
+// ============================================================================
+// FINNHUB API (REST fallback + WebSocket for live streaming)
+// ============================================================================
+async function finnhubQuote(symbol,apiKey){
+  if(!apiKey)return null;
+  try{const r=await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${apiKey}`);if(!r.ok)return null;const d=await r.json();if(!d||d.c===0)return null;return{current:d.c,high:d.h,low:d.l,open:d.o,prevClose:d.pc};}catch{return null}
+}
+
+// WebSocket for real-time price streaming
+let _ws=null,_wsReconnectTimer=null,_wsSubscribed=new Set();
+let _lastPriceUpdate=null;
+function connectWebSocket(){
+  if(!APP.settings.finnhubKey)return;
+  if(_ws&&(_ws.readyState===WebSocket.OPEN||_ws.readyState===WebSocket.CONNECTING))return;
+  try{
+    _ws=new WebSocket(`wss://ws.finnhub.io?token=${APP.settings.finnhubKey}`);
+    _ws.onopen=()=>{
+      console.log("Finnhub WS connected");
+      // Resubscribe all tickers
+      _wsSubscribed.forEach(sym=>_ws.send(JSON.stringify({type:"subscribe",symbol:sym})));
+    };
+    _ws.onmessage=(event)=>{
+      try{
+        const msg=JSON.parse(event.data);
+        if(msg.type==="trade"&&msg.data&&msg.data.length>0){
+          for(const trade of msg.data){
+            const sym=trade.s;const price=trade.p;
+            if(sym&&price){
+              if(!APP.prices[sym])APP.prices[sym]={};
+              APP.prices[sym].current=price;
+            }
+          }
+          _lastPriceUpdate=new Date();
+          // Debounced UI update + periodic snapshot
+          if(!_wsRenderTimer)_wsRenderTimer=setTimeout(()=>{
+            _wsRenderTimer=null;
+            autoSnapshot();saveAll();
+            if(activeTab==="Dashboard"||activeTab==="Positions")render();
+          },3000);
+        }
+      }catch(e){}
+    };
+    _ws.onclose=()=>{console.log("Finnhub WS closed");_ws=null;_wsReconnectTimer=setTimeout(connectWebSocket,5000);};
+    _ws.onerror=(e)=>{console.error("WS error",e);_ws?.close();};
+  }catch(e){console.error("WS connect failed",e)}
+}
+let _wsRenderTimer=null;
+function wsSubscribe(symbols){
+  for(const sym of symbols){
+    if(_wsSubscribed.has(sym))continue;
+    _wsSubscribed.add(sym);
+    if(_ws&&_ws.readyState===WebSocket.OPEN)_ws.send(JSON.stringify({type:"subscribe",symbol:sym}));
+  }
+}
+function wsUnsubscribe(symbols){
+  for(const sym of symbols){
+    _wsSubscribed.delete(sym);
+    if(_ws&&_ws.readyState===WebSocket.OPEN)_ws.send(JSON.stringify({type:"unsubscribe",symbol:sym}));
+  }
+}
+function syncWebSocketSubscriptions(){
+  if(!APP.activeUserId)return;
+  const port=PORTFOLIOS[APP.activeUserId];if(!port)return;
+  const positions=getOpenPositions(port.lots);
+  const needed=new Set([...Object.keys(positions),...port.benchmarks,...port.orders.filter(o=>o.status==="pending").map(o=>o.ticker)]);
+  // Subscribe new
+  wsSubscribe(needed);
+  // Unsubscribe old
+  const toRemove=[..._wsSubscribed].filter(s=>!needed.has(s));
+  if(toRemove.length)wsUnsubscribe(toRemove);
+}
+
+// Fallback polling for when WebSocket isn't available (e.g., no Finnhub key but has FMP key)
+let _refreshInterval=null;
+function startAutoRefresh(){
+  if(_refreshInterval)clearInterval(_refreshInterval);
+  // If Finnhub key exists, use WebSocket instead of polling
+  if(APP.settings.finnhubKey){
+    connectWebSocket();
+    syncWebSocketSubscriptions();
+    return;
+  }
+  // Fallback: poll FMP every 2 minutes
+  if(!APP.settings.fmpKey)return;
+  _refreshInterval=setInterval(async()=>{
+    if(!APP.activeUserId)return;
+    const port=PORTFOLIOS[APP.activeUserId];if(!port)return;
+    const positions=getOpenPositions(port.lots);const tickers=Object.keys(positions);
+    if(!tickers.length)return;
+    for(const tk of tickers){
+      const fq=await fmpQuote(tk,APP.settings.fmpKey);
+      if(fq){if(!APP.prices[tk])APP.prices[tk]={};APP.prices[tk].current=fq.price;_lastPriceUpdate=new Date();}
+      await new Promise(r=>setTimeout(r,200));
+    }
+    saveAll();if(activeTab==="Dashboard"||activeTab==="Positions")render();
+  },120000);
+}
+
+function getLastUpdateStr(){
+  if(!_lastPriceUpdate)return"No updates yet";
+  const now=new Date();const diff=Math.floor((now-_lastPriceUpdate)/1000);
+  if(diff<60)return`${diff}s ago`;if(diff<3600)return`${Math.floor(diff/60)}m ago`;
+  return _lastPriceUpdate.toLocaleTimeString();
+}
+
+// ============================================================================
+// FMP API (VWAP, historical)
+// ============================================================================
+async function fmpDailyPrice(symbol,apiKey,from,to){
+  if(!apiKey)return null;
+  try{
+    let url=`https://financialmodelingprep.com/api/v3/historical-price-full/${encodeURIComponent(symbol)}?apikey=${apiKey}`;
+    if(from)url+=`&from=${from}`;if(to)url+=`&to=${to}`;
+    const r=await fetch(url);if(!r.ok)return null;const d=await r.json();
+    return d.historical||null;
+  }catch{return null}
+}
+async function fmpQuote(symbol,apiKey){
+  if(!apiKey)return null;
+  try{const r=await fetch(`https://financialmodelingprep.com/api/v3/quote/${encodeURIComponent(symbol)}?apikey=${apiKey}`);if(!r.ok)return null;const d=await r.json();return d&&d[0]?d[0]:null;}catch{return null}
+}
+
+// ============================================================================
+// BUSINESS LOGIC
+// ============================================================================
+function resolveAlias(ticker){return APP.aliases[(ticker||'').toUpperCase()]||(ticker||'').toUpperCase()}
+
+function getOpenPositions(lots){
+  const pos={};
+  for(const l of lots){if(l.remainingShares<=0)continue;const t=l.ticker;if(!pos[t])pos[t]={ticker:t,totalShares:0,totalCost:0,lots:[]};pos[t].totalShares+=l.remainingShares;pos[t].totalCost+=l.remainingShares*l.entryPrice;pos[t].lots.push(l);}
+  for(const p of Object.values(pos))p.avgCost=p.totalCost/p.totalShares;
+  return pos;
+}
+
+function getClosedPositions(trades,lots){
+  const closed={};
+  for(const t of trades.filter(t=>t.side==="sell")){
+    if(!closed[t.ticker])closed[t.ticker]={ticker:t.ticker,trades:[],totalRealizedPL:0,totalProceeds:0,totalCostBasis:0,totalSharesSold:0};
+    closed[t.ticker].trades.push(t);closed[t.ticker].totalRealizedPL+=t.realizedPL||0;closed[t.ticker].totalProceeds+=t.shares*t.price;closed[t.ticker].totalCostBasis+=t.costBasis||0;closed[t.ticker].totalSharesSold+=t.shares;
+  }
+  const open=getOpenPositions(lots);const fullyClosed={};
+  for(const[tk,data]of Object.entries(closed))if(!open[tk])fullyClosed[tk]=data;
+  return{allClosed:closed,fullyClosed};
+}
+
+function executeSell(lots,ticker,shares,price,method="fifo",specificLotIds=[]){
+  let remaining=shares;const fills=[];let totalCostBasis=0;
+  let eligible;
+  if(method==="specific"&&specificLotIds.length>0)eligible=specificLotIds.map(id=>lots.find(l=>l.id===id)).filter(Boolean);
+  else{eligible=lots.filter(l=>l.ticker===ticker&&l.remainingShares>0);if(method==="lifo")eligible.reverse();}
+  for(const lot of eligible){if(remaining<=0)break;const qty=Math.min(remaining,lot.remainingShares);totalCostBasis+=qty*lot.entryPrice;fills.push({lotId:lot.id,shares:qty,costBasisPerShare:lot.entryPrice,costBasis:qty*lot.entryPrice});lot.remainingShares-=qty;remaining-=qty;}
+  if(remaining>0)return{error:`Not enough shares. Could only sell ${shares-remaining} of ${shares}.`};
+  return{fills,totalCostBasis,proceeds:shares*price,realizedPL:shares*price-totalCostBasis,remaining:0};
+}
+
+function applySlippage(price,side,bps){const slip=price*(bps/10000)*(Math.random()*0.5+0.75);return side==="buy"?price+slip:price-slip;}
+
+function calcReturns(currentPrice,ticker){
+  if(!APP.prices[ticker]||!currentPrice)return{};
+  const entries=Object.entries(APP.prices[ticker]).filter(([k])=>k.match(/^\d{4}-\d{2}-\d{2}$/)).sort((a,b)=>a[0].localeCompare(b[0]));
+  if(!entries.length)return{};
+  const findPrice=(daysBack)=>{const t=new Date();t.setDate(t.getDate()-daysBack);const ts=t.toISOString().split("T")[0];for(let i=entries.length-1;i>=0;i--)if(entries[i][0]<=ts)return entries[i][1].close;return null;};
+  const ys=new Date().getFullYear()+"-01-01";let ytdP=null;for(let i=entries.length-1;i>=0;i--)if(entries[i][0]<=ys){ytdP=entries[i][1].close;break;}
+  const week=findPrice(7),month=findPrice(30);
+  let h52=-Infinity,l52=Infinity;const c52=new Date();c52.setDate(c52.getDate()-365);const cs=c52.toISOString().split("T")[0];
+  for(const[d,bar]of entries)if(d>=cs){if(bar.high>h52)h52=bar.high;if(bar.low<l52)l52=bar.low;}
+  if(h52===-Infinity)h52=null;if(l52===Infinity)l52=null;
+  return{ytdReturn:ytdP?(currentPrice-ytdP)/ytdP:null,weekReturn:week?(currentPrice-week)/week:null,monthReturn:month?(currentPrice-month)/month:null,high52:h52,low52:l52,pctFrom52High:h52?(currentPrice-h52)/h52:null,pctFrom52Low:l52?(currentPrice-l52)/l52:null};
+}
+
+function calcVolatility(snapshots,days=30){
+  if(!snapshots||snapshots.length<5)return null;const recent=snapshots.slice(-days);const rets=[];
+  for(let i=1;i<recent.length;i++)if(recent[i-1].value>0)rets.push((recent[i].value-recent[i-1].value)/recent[i-1].value);
+  if(rets.length<3)return null;const mean=rets.reduce((a,b)=>a+b,0)/rets.length;
+  return Math.sqrt(rets.reduce((a,r)=>a+(r-mean)**2,0)/(rets.length-1))*Math.sqrt(252);
+}
+
+function calcCorrelation(pR,bR){
+  if(pR.length<5||pR.length!==bR.length)return null;const n=pR.length,mP=pR.reduce((a,b)=>a+b,0)/n,mB=bR.reduce((a,b)=>a+b,0)/n;
+  let cov=0,vP=0,vB=0;for(let i=0;i<n;i++){const dp=pR[i]-mP,db=bR[i]-mB;cov+=dp*db;vP+=dp*dp;vB+=db*db;}
+  const d=Math.sqrt(vP*vB);return d===0?0:cov/d;
+}
+
+function calcSharpe(snapshots,days=252,rfRate=0.05){
+  if(!snapshots||snapshots.length<10)return null;const recent=snapshots.slice(-days);const rets=[];
+  for(let i=1;i<recent.length;i++)if(recent[i-1].value>0)rets.push((recent[i].value-recent[i-1].value)/recent[i-1].value);
+  if(rets.length<5)return null;const mean=rets.reduce((a,b)=>a+b,0)/rets.length;
+  const std=Math.sqrt(rets.reduce((a,r)=>a+(r-mean)**2,0)/(rets.length-1));
+  if(std===0)return null;const annMean=mean*252;const annStd=std*Math.sqrt(252);return(annMean-rfRate)/annStd;
+}
+
+function getCurrentPrice(ticker){return APP.prices[ticker]?.current||null}
+
+function autoSnapshot(){
+  if(!APP.activeUserId)return;
+  const port=PORTFOLIOS[APP.activeUserId];if(!port)return;
+  const positions=getOpenPositions(port.lots);
+  const inv=Object.values(positions).reduce((s,p)=>{const cp=getCurrentPrice(p.ticker)||p.avgCost;return s+cp*p.totalShares;},0);
+  const snap={date:td(),value:port.cash+inv,cash:port.cash,invested:inv};
+  const idx=port.snapshots.findIndex(s=>s.date===td());
+  if(idx>=0)port.snapshots[idx]=snap;else port.snapshots.push(snap);
+}
+
+async function autoFetchHistoricalIfNeeded(){
+  if(!APP.activeUserId||!APP.settings.fmpKey)return;
+  const port=PORTFOLIOS[APP.activeUserId];if(!port)return;
+  const positions=getOpenPositions(port.lots);const tickers=[...new Set([...Object.keys(positions),...port.benchmarks])];
+  if(!tickers.length)return;
+  // Check if any ticker is missing historical data
+  const needsFetch=tickers.some(tk=>{
+    const entries=APP.prices[tk]?Object.keys(APP.prices[tk]).filter(k=>k.match(/^\d{4}-\d{2}-\d{2}$/)):[];
+    return entries.length<5;
+  });
+  if(!needsFetch)return;
+  console.log("Auto-fetching historical data for",tickers.length,"tickers...");
+  const yearAgo=new Date();yearAgo.setFullYear(yearAgo.getFullYear()-1);const fromStr=yearAgo.toISOString().split("T")[0];
+  for(const tk of tickers){
+    const entries=APP.prices[tk]?Object.keys(APP.prices[tk]).filter(k=>k.match(/^\d{4}-\d{2}-\d{2}$/)):[];
+    if(entries.length>=5)continue;
+    const data=await fmpDailyPrice(tk,APP.settings.fmpKey,fromStr,td());
+    if(data&&data.length){if(!APP.prices[tk])APP.prices[tk]={};for(const bar of data)APP.prices[tk][bar.date]={open:bar.open,high:bar.high,low:bar.low,close:bar.close,volume:bar.volume,vwap:bar.vwap};APP.prices[tk].current=data[0].close;}
+    await new Promise(r=>setTimeout(r,300));
+  }
+  for(const bm of port.benchmarks){if(APP.prices[bm]){if(!port.benchmarkPrices[bm])port.benchmarkPrices[bm]={};for(const[date,bar]of Object.entries(APP.prices[bm]))if(date.match(/^\d{4}-\d{2}-\d{2}$/))port.benchmarkPrices[bm][date]=bar;}}
+  saveAll();render();
+}
+
+// ============================================================================
+// CANVAS CHARTS
+// ============================================================================
+function drawLineChart(canvasId,data,valueKey,opts={}){
+  setTimeout(()=>{
+    const canvas=document.getElementById(canvasId);if(!canvas)return;const ctx=canvas.getContext("2d");
+    const dpr=window.devicePixelRatio||1;const rect=canvas.getBoundingClientRect();canvas.width=rect.width*dpr;canvas.height=rect.height*dpr;
+    ctx.scale(dpr,dpr);const W=rect.width,H=rect.height;ctx.clearRect(0,0,W,H);if(data.length<2)return;
+    const vals=data.map(d=>d[valueKey]);const min=Math.min(...vals)*0.998,max=Math.max(...vals)*1.002,range=max-min||1;
+    const pad={top:10,right:10,bottom:25,left:65};const cW=W-pad.left-pad.right,cH=H-pad.top-pad.bottom;
+    ctx.strokeStyle="rgba(255,255,255,0.05)";ctx.lineWidth=1;
+    for(let i=0;i<=4;i++){const y=pad.top+cH*(i/4);ctx.beginPath();ctx.moveTo(pad.left,y);ctx.lineTo(W-pad.right,y);ctx.stroke();}
+    ctx.fillStyle="#64748b";ctx.font="10px 'JetBrains Mono'";ctx.textAlign="right";
+    for(let i=0;i<=4;i++){const v=max-range*(i/4);const y=pad.top+cH*(i/4);ctx.fillText("$"+fmt(v,0),pad.left-8,y+3);}
+    ctx.textAlign="center";const step=Math.max(1,Math.floor(data.length/6));
+    for(let i=0;i<data.length;i+=step){const x=pad.left+cW*(i/(data.length-1));ctx.fillText(data[i].label||"",x,H-5);}
+    const grad=ctx.createLinearGradient(0,pad.top,0,H-pad.bottom);grad.addColorStop(0,(opts.color||BLUE)+"44");grad.addColorStop(1,(opts.color||BLUE)+"00");
+    ctx.beginPath();ctx.moveTo(pad.left,pad.top+cH*(1-(vals[0]-min)/range));
+    for(let i=1;i<vals.length;i++){const x=pad.left+cW*(i/(vals.length-1));const y=pad.top+cH*(1-(vals[i]-min)/range);ctx.lineTo(x,y);}
+    ctx.lineTo(pad.left+cW,H-pad.bottom);ctx.lineTo(pad.left,H-pad.bottom);ctx.closePath();ctx.fillStyle=grad;ctx.fill();
+    ctx.beginPath();ctx.strokeStyle=opts.color||BLUE;ctx.lineWidth=2;
+    for(let i=0;i<vals.length;i++){const x=pad.left+cW*(i/(vals.length-1));const y=pad.top+cH*(1-(vals[i]-min)/range);i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);}ctx.stroke();
+  },50);
+}
+function drawPieChart(canvasId,data){
+  setTimeout(()=>{
+    const canvas=document.getElementById(canvasId);if(!canvas)return;const ctx=canvas.getContext("2d");
+    const dpr=window.devicePixelRatio||1;const rect=canvas.getBoundingClientRect();canvas.width=rect.width*dpr;canvas.height=rect.height*dpr;
+    ctx.scale(dpr,dpr);const W=rect.width,H=rect.height;ctx.clearRect(0,0,W,H);
+    const total=data.reduce((s,d)=>s+d.value,0);if(total<=0)return;
+    const cx=W/2,cy=H/2-10,r=Math.min(W,H)/2-20,innerR=r*0.55;let angle=-Math.PI/2;
+    data.forEach((d,i)=>{const sweep=(d.value/total)*Math.PI*2;ctx.beginPath();ctx.moveTo(cx+innerR*Math.cos(angle),cy+innerR*Math.sin(angle));ctx.arc(cx,cy,r,angle,angle+sweep);ctx.arc(cx,cy,innerR,angle+sweep,angle,true);ctx.closePath();ctx.fillStyle=COLORS_PIE[i%COLORS_PIE.length];ctx.fill();angle+=sweep;});
+  },50);
+}
+
+// ============================================================================
+// EXCEL EXPORT — Matching Template
+// ============================================================================
+function exportToExcel(){
+  const userId=APP.activeUserId;const port=PORTFOLIOS[userId];const user=APP.users[userId];const wb=XLSX.utils.book_new();
+  const positions=getOpenPositions(port.lots);const{allClosed,fullyClosed}=getClosedPositions(port.trades,port.lots);
+  const posArr=Object.values(positions);
+  const totalInvested=posArr.reduce((s,p)=>{const cp=getCurrentPrice(p.ticker)||p.avgCost;return s+cp*p.totalShares;},0);
+  const totalValue=port.cash+totalInvested;
+  const totalUnrealized=posArr.reduce((s,p)=>{const cp=getCurrentPrice(p.ticker)||p.avgCost;return s+(cp-p.avgCost)*p.totalShares;},0);
+  const totalRealized=port.trades.filter(t=>t.side==="sell").reduce((s,t)=>s+(t.realizedPL||0),0);
+  const totalDivs=port.dividends.reduce((s,d)=>s+d.totalAmount,0);
+  const totalPL=totalUnrealized+totalRealized;
+
+  // ---- REPORT TAB ----
+  const rData=[];
+  rData.push(["Paper Portfolio Report"]);
+  rData.push(["Name:",user?.name||"",,,,,,,,,"As of:",td()]);
+  rData.push([]);
+  rData.push(["Fund Capital Balance and Cash Flows (US$)"]);
+  rData.push([,,,,,,,,,,,"Fund US$"]);
+  rData.push(["Capital Balance - Beginning",,,,,,,,,,, port.startingCapital]);
+  rData.push(["+ Net Capital Gain / (Loss) - Equity",,,,,,,,,,, totalPL]);
+  rData.push(["Capital Balance - Ending",,,,,,,,,,, totalValue]);
+  rData.push([]);
+  rData.push(["% Return ITD",,,,,,,,,,,totalPL/port.startingCapital]);
+  rData.push(["YTD % Return"]);
+  rData.push([]);
+  // Volatility & Performance header
+  rData.push([,,,,,,,,,,,,,,,,,,,,,,,,,,,"Volatility",,"Performance"]);
+  rData.push(["Benchmark",,,,,,,,,,,,,,,,,,,,,,,,,,"1 Mth","3 Mth","Daily","1 Mth","YTD"]);
+  for(const bm of port.benchmarks){rData.push([bm]);}
+  rData.push([]);
+  rData.push([]);
+  // Position header
+  rData.push(["Portfolio Positions and % Return"]);
+  rData.push([]);
+  const posHeaders=["#","","","Ticker","Conviction","","","","","","Position Name","","Value (US$)","% of Capital","Cumulative Shares","Gain/(Loss) US$","Wtd Avg Invstmt US$","% Return","Current Price","Fair Price","% Chg to FP","52 Wk High","% Chg to 52W Hi","52 Wk Low","% Chg to 52W Lo","1-Mth ADV ($MM)","3-Mth ADV ($MM)","Position as % ADV","Diluted Mcap(US$)","1 Mth Vol","3 Mth Vol","Prior Year Return","YTD Return","5-Year Return","First Trading","3 Mth Corr CCMP","12 Mth Corr CCMP"];
+  rData.push(posHeaders);
+  rData.push(["LONG POSITIONS"]);
+
+  let posNum=1;
+  for(const p of posArr){
+    const cp=getCurrentPrice(p.ticker)||p.avgCost;const mv=cp*p.totalShares;const upl=(cp-p.avgCost)*p.totalShares;
+    const r=calcReturns(cp,p.ticker);
+    // Calculate weighted avg investment from all trades for this ticker
+    const buyTrades=port.trades.filter(t=>t.ticker===p.ticker&&t.side==="buy");
+    const totalInv=buyTrades.reduce((s,t)=>s+t.shares*t.price,0);
+    rData.push([posNum,"","",p.ticker,"","","","","","",p.ticker,"",mv,mv/totalValue,p.totalShares,upl,totalInv,upl/p.totalCost,cp,"","",r.high52,r.pctFrom52High,r.low52,r.pctFrom52Low,"","","","",r.monthReturn!=null?(r.monthReturn*2.5):"","","",r.ytdReturn,"","",""]);
+    posNum++;
+  }
+  rData.push([]);
+  const longTotal=posArr.reduce((s,p)=>{const cp=getCurrentPrice(p.ticker)||p.avgCost;return s+cp*p.totalShares;},0);
+  rData.push(["","Subtotal - Long Positions","","","","","","","","","","",...[longTotal,longTotal/totalValue,"",totalUnrealized]]);
+  rData.push([]);
+  rData.push(["CASH POSITION"]);
+  rData.push(["","Subtotal - Cash",,,,,,,,,,port.cash,port.cash/totalValue]);
+  rData.push([]);
+  rData.push(["TOTAL FUND (US$)",,,,,,,,,,,,totalValue,"","",...[totalPL]]);
+  rData.push([]);
+  rData.push(["REALIZED POSITIONS"]);
+  let rlzNum=1;
+  for(const[tk,c]of Object.entries(fullyClosed)){
+    const cp=getCurrentPrice(tk)||0;const r=calcReturns(cp,tk);
+    const buyTrades=port.trades.filter(t=>t.ticker===tk&&t.side==="buy");
+    const totalInv=buyTrades.reduce((s,t)=>s+t.shares*t.price,0);
+    rData.push([rlzNum,"","",tk,"","","","","","",tk,"",0,0,0,c.totalRealizedPL,totalInv,c.totalCostBasis>0?c.totalRealizedPL/c.totalCostBasis:0,cp]);
+    rlzNum++;
+  }
+  rData.push([]);
+  rData.push(["Exposure"]);
+  rData.push(["Longs",,,,,,,,,,, longTotal,longTotal/totalValue]);
+  rData.push(["Cash",,,,,,,,,,, port.cash,port.cash/totalValue]);
+  rData.push(["Total",,,,,,,,,,, totalValue,1]);
+
+  const wsReport=XLSX.utils.aoa_to_sheet(rData);
+  wsReport["!cols"]=Array(37).fill({wch:14});wsReport["!cols"][0]={wch:5};wsReport["!cols"][3]={wch:12};wsReport["!cols"][10]={wch:22};
+  XLSX.utils.book_append_sheet(wb,wsReport,"Report");
+
+  // ---- TRADE LOG TAB ----
+  const tlData=[];
+  tlData.push(["TRADE LOG",,,,,"Instruction: All trades logged here."]);
+  tlData.push([]);
+  tlData.push(["","","Ticker","","Company","Submission Date","Shares","FX","","","Execution Date","Price % Chg","Executed Price","","Cumulative Shares","Cash Inflow/(Outflow)","","Cash Inflow/(Outflow) US$","Cumulative Cash US$","Gross Turnover US$","","Net Gain/(Loss) US$","Wtd Avg Investment US$","Cumulative Wtd Avg","Days in Portfolio","% Return"]);
+
+  // Group trades by ticker
+  const tickerTrades={};
+  for(const t of port.trades){if(!tickerTrades[t.ticker])tickerTrades[t.ticker]=[];tickerTrades[t.ticker].push(t);}
+
+  let tradeNum=1;
+  for(const[ticker,trades]of Object.entries(tickerTrades)){
+    const sorted=[...trades].sort((a,b)=>a.date.localeCompare(b.date));
+    let cumShares=0,cumCash=0;
+    for(const t of sorted){
+      const shares=t.side==="buy"?t.shares:-t.shares;
+      const cashFlow=t.side==="buy"?-(t.shares*t.price):(t.shares*t.price);
+      cumShares+=shares;cumCash+=cashFlow;
+      const prevTrade=sorted[sorted.indexOf(t)-1];
+      const pctChg=prevTrade?((t.price-prevTrade.price)/prevTrade.price*100):0;
+      const firstTrade=sorted[0];
+      const daysIn=Math.floor((new Date(t.date)-new Date(firstTrade.date))/86400000);
+      tlData.push(["",tradeNum,ticker,"",t.ticker,t.date,shares,1,"","",t.date,tradeNum>1?pctChg.toFixed(4):"",t.price,"",cumShares,cashFlow,"",cashFlow,cumCash,Math.abs(cashFlow),"",t.side==="sell"?t.realizedPL||0:"","","",daysIn,""]);
+      tradeNum++;
+    }
+    // Summary row for this ticker
+    const cp=getCurrentPrice(ticker)||0;const pos=getOpenPositions(port.lots)[ticker];
+    const sellTrades=sorted.filter(t=>t.side==="sell");
+    const totalRL=sellTrades.reduce((s,t)=>s+(t.realizedPL||0),0);
+    const buyTotal=sorted.filter(t=>t.side==="buy").reduce((s,t)=>s+t.shares*t.price,0);
+    const firstDate=sorted[0]?.date||"";const daysTotal=Math.floor((Date.now()-new Date(firstDate).getTime())/86400000);
+    const currentVal=pos?cp*pos.totalShares:0;const totalPLTicker=currentVal+cumCash;
+    tlData.push(["","",,"",ticker,"","","1","","",td(),"",cp,"",cumShares,cumCash,"",cumCash,cumCash,"","",totalPLTicker,buyTotal,"",daysTotal,buyTotal>0?totalPLTicker/buyTotal:""]);
+    tlData.push([]);
+  }
+
+  const wsTL=XLSX.utils.aoa_to_sheet(tlData);
+  wsTL["!cols"]=Array(26).fill({wch:14});wsTL["!cols"][0]={wch:3};wsTL["!cols"][2]={wch:12};wsTL["!cols"][4]={wch:20};
+  XLSX.utils.book_append_sheet(wb,wsTL,"Trade Log");
+
+  // ---- P+L TAB ----
+  const plData=[];
+  plData.push([td(),port.startingCapital]);
+  plData.push([]);
+  plData.push(["","Date","Beg. NAV","P&L","Ending NAV","","Equity","Total Cash","","Transactions","","Cumulative P&L ($)"]);
+  plData.push(["","","","","","","","","","Trades","","Equity","Realized","Total"]);
+
+  const snaps=[...port.snapshots].sort((a,b)=>a.date.localeCompare(b.date));
+  for(let i=0;i<snaps.length;i++){
+    const s=snaps[i];const prev=i>0?snaps[i-1]:null;
+    const pl=prev?s.value-prev.value:0;
+    const begNAV=prev?prev.value:port.startingCapital;
+    // Find trades on this date
+    const dayTrades=port.trades.filter(t=>t.date===s.date);
+    const tradeCash=dayTrades.reduce((sum,t)=>sum+(t.side==="buy"?-(t.shares*t.price):(t.shares*t.price)),0);
+    const cumEquityPL=totalUnrealized;const cumRealizedPL=totalRealized;
+    plData.push(["",s.date,begNAV,pl,s.value,"",s.invested,s.cash,"",tradeCash||"-","",s.value-port.startingCapital-totalRealized,totalRealized,s.value-port.startingCapital]);
+  }
+
+  const wsPL=XLSX.utils.aoa_to_sheet(plData);
+  wsPL["!cols"]=Array(15).fill({wch:16});wsPL["!cols"][0]={wch:3};wsPL["!cols"][1]={wch:12};
+  XLSX.utils.book_append_sheet(wb,wsPL,"P+L");
+
+  // Download
+  const wbOut=XLSX.write(wb,{bookType:"xlsx",type:"array"});
+  const blob=new Blob([wbOut],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+  const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;
+  a.download=`paper_portfolio_${user?.name||"export"}_${td()}.xlsx`;a.click();URL.revokeObjectURL(url);
+}
+
+// ============================================================================
+// RENDER HELPERS
+// ============================================================================
+function badge(text,color=BLUE){return`<span class="badge" style="background:${color}22;color:${color}">${esc(text)}</span>`}
+function plSpan(n,text){return`<span style="color:${plC(n)}" class="mono">${text||fmtPL(n)}</span>`}
+function pctSpan(n){return`<span style="color:${plC(n)}" class="mono">${fmtPct(n)}</span>`}
+function statCard(label,value,sub,color){return`<div class="card stat-card"><div class="stat-label">${label}</div><div class="stat-value" style="color:${color||'#e2e8f0'}">${value}</div>${sub?`<div class="stat-sub" style="color:${color||'#94a3b8'}">${sub}</div>`:""}</div>`}
+
+// ============================================================================
+// MAIN RENDER
+// ============================================================================
+function render(){
+  if(!APP)APP=getDefaultState();
+  const userId=APP.activeUserId;const port=PORTFOLIOS[userId];
+  if(!userId||!port){renderUserScreen();return;}
+  const pendingOrders=port.orders.filter(o=>o.status==="pending");
+  let html=`<div class="header"><div class="header-left"><span class="logo"><span class="logo-icon">◆</span> Paper Trading</span>${badge(APP.users[userId]?.name||"",GREEN)}</div><div class="header-right"><span style="display:flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:50%;background:${GREEN};display:inline-block"></span><span class="text-xs muted">Synced</span></span>`;
+  if(pendingOrders.length>0)html+=`<span class="badge" style="background:${AMBER}22;color:${AMBER}">${pendingOrders.length} pending</span>`;
+  html+=`<span class="text-xs muted mono">${getLastUpdateStr()}</span>`;
+  html+=`<span class="text-sm muted mono">Cash: $${fmt(port.cash,0)}</span><button class="btn btn-ghost btn-sm" onclick="switchUser()">Switch User</button></div></div>`;
+  html+=`<div class="tab-bar">${TABS.map(t=>`<div class="tab ${activeTab===t?'active':''}" onclick="setTab('${t}')">${t}</div>`).join("")}</div>`;
+  html+=`<div class="content" id="tab-content"></div>`;
+  document.getElementById("app").innerHTML=html;
+  const content=document.getElementById("tab-content");
+  switch(activeTab){
+    case "Dashboard":content.innerHTML=renderDashboard();setupDashboardCharts();break;
+    case "Trade":content.innerHTML=renderTrade();setTimeout(()=>updateTradeForm(),10);break;
+    case "Positions":content.innerHTML=renderPositions();break;
+    case "Closed":content.innerHTML=renderClosed();break;
+    case "Orders":content.innerHTML=renderOrders();break;
+    case "History":content.innerHTML=renderHistory();break;
+    case "Settings":content.innerHTML=renderSettings();break;
+  }
+}
+
+function renderUserScreen(){
+  const users=APP.users||{};const hasData=Object.keys(users).length>0;
+  let html=`<div class="user-screen">`;
+  if(!hasData)html+=`<div class="card user-card" style="background:rgba(59,130,246,0.05);border-color:rgba(59,130,246,0.2)"><div class="flex items-center justify-between gap-12"><div><div class="bold" style="font-size:14px;color:#93c5fd">Have a backup file?</div><div class="text-sm muted mt-4">Restore your data from a JSON backup file.</div></div><button class="btn btn-primary" onclick="triggerBackupImport()">Import Backup</button></div></div>`;
+  html+=`<div style="text-align:center"><div class="logo-big"><span class="logo-icon">◆</span> Paper Trading</div><div class="muted" style="font-size:14px">Realistic portfolio simulation with lot-level tracking</div></div>`;
+  if(hasData){
+    html+=`<div class="card user-card"><div class="card-subtitle">Select Portfolio</div>`;
+    for(const[id,u]of Object.entries(users))html+=`<div class="portfolio-option" onclick="selectUser('${id}')"><div><div class="bold">${esc(u.name)}</div><div class="text-sm muted">Created ${u.createdAt} | Starting: $${fmt(u.startingCapital,0)}</div></div><span class="blue" style="font-size:18px">→</span></div>`;
+    html+=`</div>`;
+  }
+  html+=`<div class="card user-card"><div class="card-subtitle">Create New Portfolio</div><div class="flex flex-col gap-12"><div class="input-group"><label class="input-label">Your Name</label><input class="input-field" id="new-name" placeholder="Warren"></div><div class="input-group"><label class="input-label">Starting Capital ($)</label><input class="input-field" id="new-capital" type="number" value="100000" placeholder="100000"></div><button class="btn btn-primary" style="padding:12px 0;margin-top:8px" onclick="createUser()">Create Portfolio</button></div></div></div>`;
+  document.getElementById("app").innerHTML=html;
+}
+
+// ---- DASHBOARD ----
+function renderDashboard(){
+  const port=PORTFOLIOS[APP.activeUserId];const positions=getOpenPositions(port.lots);const posArr=Object.values(positions);
+  const totalInvested=posArr.reduce((s,p)=>{const cp=getCurrentPrice(p.ticker)||p.avgCost;return s+cp*p.totalShares;},0);
+  const totalValue=port.cash+totalInvested;const totalReturn=totalValue-port.startingCapital;
+  const totalReturnPct=port.startingCapital>0?totalReturn/port.startingCapital:0;
+  const totalUnrealized=posArr.reduce((s,p)=>{const cp=getCurrentPrice(p.ticker)||p.avgCost;return s+(cp-p.avgCost)*p.totalShares;},0);
+  const totalRealized=port.trades.filter(t=>t.side==="sell").reduce((s,t)=>s+(t.realizedPL||0),0);
+  const totalDivs=port.dividends.reduce((s,d)=>s+d.totalAmount,0);const vol=calcVolatility(port.snapshots);
+  const sharpe=calcSharpe(port.snapshots);
+  const pendingOrders=port.orders.filter(o=>o.status==="pending");
+
+  let html="";
+  if(pendingOrders.length>0)html+=`<div class="settle-banner"><div class="settle-banner-text"><strong>${pendingOrders.length} order${pendingOrders.length>1?'s':''} awaiting settlement.</strong> After market close, go to <span style="cursor:pointer;text-decoration:underline" onclick="setTab('Orders')">Orders</span> to settle at VWAP or fill manually.</div></div>`;
+
+  html+=`<div class="flex gap-12 flex-wrap">`;
+  const fU0=(n)=>n==null||isNaN(n)?"—":"$"+fmt(Math.abs(n),0);
+  const fP0=(n)=>n==null||isNaN(n)?"—":(n>=0?"+$":"-$")+fmt(Math.abs(n),0);
+  html+=statCard("Portfolio Value",fU0(totalValue),`Started: ${fU0(port.startingCapital)}`);
+  html+=statCard("Total Return",fP0(totalReturn),fmtPct(totalReturnPct),plC(totalReturn));
+  html+=statCard("Unrealized P&L",fP0(totalUnrealized),null,plC(totalUnrealized));
+  html+=statCard("Realized P&L",fP0(totalRealized),`Dividends: ${fP0(totalDivs)}`,plC(totalRealized));
+  html+=statCard("Cash",fU0(port.cash),`${totalValue>0?((port.cash/totalValue)*100).toFixed(1):"0"}% of portfolio`);
+  html+=statCard("Volatility (Ann.)",vol!=null?(vol*100).toFixed(1)+"%":"—","30-day rolling");
+  html+=statCard("Sharpe Ratio",sharpe!=null?sharpe.toFixed(2):"—","Annualized, rf=5%");
+  html+=`</div>`;
+
+  html+=`<div class="flex gap-16 flex-wrap mt-12">`;
+  // Performance chart with timeframe and benchmark toggles
+  if(port.snapshots.length>1){
+    html+=`<div class="card" style="flex:2;min-width:350px"><div class="flex justify-between items-center mb-12"><div class="card-subtitle" style="margin-bottom:0">Performance</div><div class="flex gap-4">`;
+    const timeframes=[{label:"1M",days:30},{label:"3M",days:90},{label:"6M",days:180},{label:"YTD",days:"ytd"},{label:"1Y",days:365},{label:"All",days:9999}];
+    timeframes.forEach(tf=>{
+      const isActive=(_dashTF||"All")===tf.label;
+      html+=`<button class="btn ${isActive?'btn-primary':'btn-ghost'} btn-sm" onclick="_dashTF='${tf.label}';render()">${tf.label}</button>`;
+    });
+    html+=`</div></div>`;
+    // Benchmark toggles
+    html+=`<div class="flex gap-8 flex-wrap mb-8">`;
+    html+=`<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:#94a3b8;cursor:pointer"><input type="checkbox" id="cb-port" checked onchange="render()" style="accent-color:${BLUE}">Portfolio</label>`;
+    port.benchmarks.forEach((bm,i)=>{
+      const col=COLORS_PIE[(i+3)%COLORS_PIE.length];
+      html+=`<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:#94a3b8;cursor:pointer"><input type="checkbox" class="cb-bm" data-bm="${bm}" onchange="render()" style="accent-color:${col}">${bm}</label>`;
+    });
+    html+=`</div>`;
+    html+=`<canvas id="chart-perf" class="chart" style="height:250px"></canvas></div>`;
+  }
+  const pieData=posArr.map(p=>{const cp=getCurrentPrice(p.ticker)||p.avgCost;return{name:p.ticker,value:cp*p.totalShares};});
+  if(port.cash>0)pieData.push({name:"Cash",value:port.cash});
+  if(pieData.length>0)html+=`<div class="card" style="flex:1;min-width:280px"><div class="card-subtitle">Allocation</div><canvas id="chart-pie" class="chart"></canvas><div class="pie-legend">${pieData.map((d,i)=>`<div class="pie-legend-item"><div class="pie-legend-dot" style="background:${COLORS_PIE[i%COLORS_PIE.length]}"></div>${esc(d.name)} $${fmt(d.value,0)}</div>`).join("")}</div></div>`;
+  html+=`</div>`;
+
+  if(port.benchmarks.length>0){
+    html+=`<div class="card mt-12"><div class="card-subtitle">Benchmark Correlation</div><div class="flex gap-20 flex-wrap">`;
+    for(const bm of port.benchmarks){
+      const bmSnaps=port.benchmarkPrices[bm]||{};const bmDates=Object.keys(bmSnaps).sort();
+      if(port.snapshots.length<5||bmDates.length<5){html+=`<div class="muted text-sm">${esc(bm)}: Need more data</div>`;continue;}
+      const commonDates=port.snapshots.map(s=>s.date).filter(d=>bmSnaps[d]);
+      if(commonDates.length<5){html+=`<div class="muted text-sm">${esc(bm)}: Need more data</div>`;continue;}
+      const pR=[],bR=[];
+      for(let i=1;i<commonDates.length;i++){const pP=port.snapshots.find(s=>s.date===commonDates[i-1])?.value;const pC=port.snapshots.find(s=>s.date===commonDates[i])?.value;const bP=bmSnaps[commonDates[i-1]]?.close;const bC=bmSnaps[commonDates[i]]?.close;if(pP&&pC&&bP&&bC){pR.push((pC-pP)/pP);bR.push((bC-bP)/bP);}}
+      const corr=calcCorrelation(pR,bR);
+      html+=`<div class="flex items-center gap-8">${badge(bm,BLUE)}<span class="mono bold" style="font-size:14px">${corr!=null?corr.toFixed(3):"—"}</span></div>`;
+    }
+    html+=`</div></div>`;
+  }
+  return html;
+}
+let _dashTF="All";
+function setupDashboardCharts(){
+  const port=PORTFOLIOS[APP.activeUserId];
+  // Performance chart with benchmarks
+  if(port.snapshots.length>1){
+    // Filter by timeframe
+    let snaps=[...port.snapshots].sort((a,b)=>a.date.localeCompare(b.date));
+    const tf=_dashTF||"All";
+    let cutoff=null;
+    if(tf==="1M"){cutoff=new Date();cutoff.setDate(cutoff.getDate()-30);}
+    else if(tf==="3M"){cutoff=new Date();cutoff.setDate(cutoff.getDate()-90);}
+    else if(tf==="6M"){cutoff=new Date();cutoff.setDate(cutoff.getDate()-180);}
+    else if(tf==="YTD"){cutoff=new Date(new Date().getFullYear(),0,1);}
+    else if(tf==="1Y"){cutoff=new Date();cutoff.setFullYear(cutoff.getFullYear()-1);}
+    if(cutoff){const cs=cutoff.toISOString().split("T")[0];snaps=snaps.filter(s=>s.date>=cs);}
+    if(snaps.length<2)snaps=port.snapshots.slice(-30);
+
+    // Index to 100 for comparison
+    const baseVal=snaps[0].value;
+    const portData=snaps.map(s=>({date:s.date,label:s.date.slice(5),value:baseVal>0?(s.value/baseVal)*100:100}));
+
+    // Collect enabled benchmarks
+    const enabledBMs=[];
+    document.querySelectorAll('.cb-bm').forEach(cb=>{if(cb.checked)enabledBMs.push(cb.dataset.bm)});
+
+    const bmDataSets=[];
+    for(const bm of enabledBMs){
+      const bmPrices=port.benchmarkPrices[bm]||{};
+      const bmEntries=Object.entries(bmPrices).filter(([d])=>d>=snaps[0].date&&d<=snaps[snaps.length-1].date).sort((a,b)=>a[0].localeCompare(b[0]));
+      if(bmEntries.length<2)continue;
+      const bmBase=bmEntries[0][1].close;
+      bmDataSets.push({name:bm,data:bmEntries.map(([d,bar])=>({date:d,value:bmBase>0?(bar.close/bmBase)*100:100}))});
+    }
+
+    // Draw multi-line chart
+    setTimeout(()=>{
+      const canvas=document.getElementById("chart-perf");if(!canvas)return;const ctx=canvas.getContext("2d");
+      const dpr=window.devicePixelRatio||1;const rect=canvas.getBoundingClientRect();canvas.width=rect.width*dpr;canvas.height=rect.height*dpr;
+      ctx.scale(dpr,dpr);const W=rect.width,H=rect.height;ctx.clearRect(0,0,W,H);
+      const allVals=[...portData.map(d=>d.value)];bmDataSets.forEach(ds=>ds.data.forEach(d=>allVals.push(d.value)));
+      const min=Math.min(...allVals)*0.995,max=Math.max(...allVals)*1.005,range=max-min||1;
+      const pad={top:10,right:10,bottom:25,left:50};const cW=W-pad.left-pad.right,cH=H-pad.top-pad.bottom;
+      // Grid
+      ctx.strokeStyle="rgba(255,255,255,0.05)";ctx.lineWidth=1;
+      for(let i=0;i<=4;i++){const y=pad.top+cH*(i/4);ctx.beginPath();ctx.moveTo(pad.left,y);ctx.lineTo(W-pad.right,y);ctx.stroke();}
+      ctx.fillStyle="#64748b";ctx.font="10px 'JetBrains Mono'";ctx.textAlign="right";
+      for(let i=0;i<=4;i++){const v=max-range*(i/4);ctx.fillText(v.toFixed(1),pad.left-8,pad.top+cH*(i/4)+3);}
+      // 100 line
+      if(min<100&&max>100){const y100=pad.top+cH*(1-(100-min)/range);ctx.strokeStyle="rgba(255,255,255,0.15)";ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(pad.left,y100);ctx.lineTo(W-pad.right,y100);ctx.stroke();ctx.setLineDash([]);}
+      // X labels
+      ctx.textAlign="center";ctx.fillStyle="#64748b";const step=Math.max(1,Math.floor(portData.length/6));
+      for(let i=0;i<portData.length;i+=step){const x=pad.left+cW*(i/(portData.length-1));ctx.fillText(portData[i].label,x,H-5);}
+      // Draw helper
+      const drawLine=(data,color,dates)=>{
+        ctx.beginPath();ctx.strokeStyle=color;ctx.lineWidth=2;let started=false;
+        for(const pt of data){
+          const idx=dates.findIndex(d=>d>=pt.date);if(idx<0)continue;
+          const x=pad.left+cW*(idx/(dates.length-1));const y=pad.top+cH*(1-(pt.value-min)/range);
+          if(!started){ctx.moveTo(x,y);started=true;}else ctx.lineTo(x,y);
+        }ctx.stroke();
+      };
+      const dates=portData.map(d=>d.date);
+      // Benchmarks first (behind)
+      bmDataSets.forEach((ds,i)=>{drawLine(ds.data,COLORS_PIE[(i+3)%COLORS_PIE.length],dates)});
+      // Portfolio on top
+      const showPort=document.getElementById("cb-port")?.checked!==false;
+      if(showPort){
+        const grad=ctx.createLinearGradient(0,pad.top,0,H-pad.bottom);grad.addColorStop(0,BLUE+"44");grad.addColorStop(1,BLUE+"00");
+        ctx.beginPath();
+        portData.forEach((d,i)=>{const x=pad.left+cW*(i/(portData.length-1));const y=pad.top+cH*(1-(d.value-min)/range);i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});
+        ctx.lineTo(pad.left+cW,H-pad.bottom);ctx.lineTo(pad.left,H-pad.bottom);ctx.closePath();ctx.fillStyle=grad;ctx.fill();
+        drawLine(portData,BLUE,dates);
+      }
+    },50);
+  }
+  // Pie chart
+  const positions=getOpenPositions(port.lots);const posArr=Object.values(positions);
+  const pieData=posArr.map(p=>{const cp=getCurrentPrice(p.ticker)||p.avgCost;return{name:p.ticker,value:cp*p.totalShares};});
+  if(port.cash>0)pieData.push({name:"Cash",value:port.cash});
+  if(pieData.length>0)drawPieChart("chart-pie",pieData);
+}
+
+// ---- TRADE ----
+function renderTrade(){
+  const port=PORTFOLIOS[APP.activeUserId];const positions=getOpenPositions(port.lots);
+  let html=`<div class="card"><div class="card-title">Place Trade</div>`;
+  html+=`<div class="flex gap-12 flex-wrap mb-16"><div class="input-group"><label class="input-label">Ticker</label><input class="input-field" id="t-ticker" placeholder="AAPL" style="width:100px;text-transform:uppercase" oninput="updateTradeForm()"></div><button class="btn btn-ghost" onclick="fetchQuote()" style="align-self:flex-end">Get Quote</button><div id="quote-display" class="flex items-end text-sm muted mono" style="align-self:flex-end"></div></div>`;
+  html+=`<div class="flex gap-12 flex-wrap mb-16">`;
+  html+=`<div class="input-group"><label class="input-label">Side</label><select class="input-field" id="t-side" style="width:100px" onchange="updateTradeForm()"><option value="buy">BUY</option><option value="sell">SELL</option></select></div>`;
+  html+=`<div class="input-group"><label class="input-label">Shares</label><input class="input-field" id="t-shares" type="number" placeholder="100" style="width:100px" oninput="updateTradeCalcs()"></div>`;
+  html+=`<div class="input-group"><label class="input-label">Order Type</label><select class="input-field" id="t-ordertype" style="width:120px" onchange="updateTradeForm()"><option value="VWAP">VWAP</option><option value="Market">Market</option><option value="Limit">Limit</option></select></div>`;
+  html+=`<div id="price-fields"></div></div>`;
+  html+=`<div id="trade-info" style="background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:13px;display:none"><div id="trade-info-existing" class="muted"></div><div id="trade-info-new" class="muted mt-4"></div></div>`;
+  html+=`<div id="sell-options"></div>`;
+  html+=`<div class="flex gap-12 items-end flex-wrap"><button class="btn btn-success" id="t-submit" onclick="submitTrade()" style="min-width:160px;padding:10px 24px;font-size:14px">PLACE VWAP ORDER</button></div>`;
+  html+=`<div id="trade-status"></div></div>`;
+  // Quick reference
+  html+=`<div class="card mt-12"><div class="card-subtitle">Quick Reference — Cash Available: <span class="green mono">$${fmt(port.cash)}</span></div>`;
+  html+=`<div class="overflow-x"><table><thead><tr><th>Ticker</th><th>Shares</th><th>Avg Cost</th><th>Current</th><th>Unrealized P&L</th></tr></thead><tbody>`;
+  const posArr=Object.values(positions);
+  if(!posArr.length)html+=`<tr class="empty-row"><td colspan="5">No open positions</td></tr>`;
+  else posArr.forEach(p=>{const cp=getCurrentPrice(p.ticker)||p.avgCost;const upl=(cp-p.avgCost)*p.totalShares;html+=`<tr><td class="bold">${esc(p.ticker)}</td><td class="mono-cell">${fmt(p.totalShares,0)}</td><td class="mono-cell">$${fmt(p.avgCost)}</td><td class="mono-cell">$${fmt(cp)}</td><td class="mono-cell">${plSpan(upl)}</td></tr>`;});
+  html+=`</tbody></table></div></div>`;return html;
+}
+
+function updateTradeForm(){
+  const ot=document.getElementById("t-ordertype")?.value||"VWAP";
+  const side=document.getElementById("t-side")?.value||"buy";
+  const pf=document.getElementById("price-fields");const so=document.getElementById("sell-options");const btn=document.getElementById("t-submit");
+  if(pf){
+    let h="";
+    if(ot==="Market"){
+      const cp=getCurrentPrice(resolveAlias(document.getElementById("t-ticker")?.value||""));
+      h=`<div class="input-group"><label class="input-label">Price (live)</label><input class="input-field" id="t-price" type="number" value="${cp||''}" style="width:120px;opacity:0.7" readonly placeholder="Fetch quote first"></div>`;
+      if(!cp)h+=`<div class="text-xs" style="color:${AMBER};align-self:flex-end;padding:8px 0">Click "Get Quote" — price auto-fills</div>`;
+    }
+    else if(ot==="Limit")h=`<div class="input-group"><label class="input-label">Limit Price</label><input class="input-field" id="t-limit" type="number" placeholder="150.00" style="width:120px"></div>`;
+    else h=`<div class="text-sm muted" style="align-self:flex-end;padding:8px 0">Fill price determined at settlement (EOD VWAP)</div>`;
+    pf.innerHTML=h;
+  }
+  if(so){
+    if(side==="sell"){
+      const port=PORTFOLIOS[APP.activeUserId];const ticker=resolveAlias(document.getElementById("t-ticker")?.value||"");
+      const positions=getOpenPositions(port.lots);const lots=positions[ticker]?.lots||[];
+      let h=`<div class="flex gap-12 mb-16"><div class="input-group"><label class="input-label">Cost Basis Method</label><select class="input-field" id="t-method" style="width:160px" onchange="updateTradeForm()"><option value="fifo">FIFO</option><option value="lifo">LIFO</option><option value="specific">Specific Lots</option></select></div></div>`;
+      const method=document.getElementById("t-method")?.value||"fifo";
+      if(method==="specific"&&lots.length>0){h+=`<div class="lot-selector mb-16"><div class="text-xs muted mb-8" style="text-transform:uppercase;letter-spacing:1px">Select Lots</div>`;lots.forEach(l=>{h+=`<label class="lot-item"><input type="checkbox" class="lot-checkbox" data-lotid="${l.id}">${l.entryDate} — ${l.remainingShares} shares @ $${fmt(l.entryPrice)} <span class="muted text-xs">(ID: ${l.id.slice(0,8)})</span></label>`;});h+=`</div>`;}
+      so.innerHTML=h;
+    }else so.innerHTML="";
+  }
+  if(btn){
+    if(ot==="VWAP")btn.textContent=`Place VWAP ${side.toUpperCase()}`;
+    else if(ot==="Limit")btn.textContent=`Place Limit ${side.toUpperCase()}`;
+    else btn.textContent=side==="buy"?"BUY":"SELL";
+    btn.className=`btn ${side==="buy"?"btn-success":"btn-danger"}`;btn.style.cssText="min-width:140px;padding:10px 24px;font-size:14px";
+  }
+  updateTradeCalcs();
+}
+
+function updateTradeCalcs(){
+  const port=PORTFOLIOS[APP.activeUserId];if(!port)return;
+  const ticker=resolveAlias(document.getElementById("t-ticker")?.value||"");
+  const shares=parseInt(document.getElementById("t-shares")?.value)||0;
+  const side=document.getElementById("t-side")?.value||"buy";
+  const positions=getOpenPositions(port.lots);const posArr=Object.values(positions);
+  const totalInvested=posArr.reduce((s,p)=>{const cp=getCurrentPrice(p.ticker)||p.avgCost;return s+cp*p.totalShares;},0);
+  const totalValue=port.cash+totalInvested;
+  const infoDiv=document.getElementById("trade-info");
+  const existDiv=document.getElementById("trade-info-existing");
+  const newDiv=document.getElementById("trade-info-new");
+  if(!infoDiv||!existDiv||!newDiv)return;
+
+  if(!ticker){infoDiv.style.display="none";return;}
+  infoDiv.style.display="block";
+
+  const existingPos=positions[ticker];
+  const cp=getCurrentPrice(ticker)||0;
+  const existingShares=existingPos?existingPos.totalShares:0;
+  const existingValue=cp>0?existingShares*cp:existingPos?existingPos.totalCost:0;
+  const existingPct=totalValue>0?existingValue/totalValue:0;
+
+  if(existingShares>0){
+    existDiv.innerHTML=`Current position: <span class="mono" style="color:#e2e8f0">${fmt(existingShares,0)} shares</span> | Value: <span class="mono" style="color:#e2e8f0">$${fmt(existingValue)}</span> | <span class="mono" style="color:${BLUE}">${(existingPct*100).toFixed(2)}% of capital</span>`;
+  }else{
+    existDiv.innerHTML=`<span class="muted">No existing position in ${ticker}</span>`;
+  }
+
+  if(shares>0&&cp>0){
+    const tradeValue=shares*cp;
+    const tradePct=totalValue>0?tradeValue/totalValue:0;
+    const newShares=side==="buy"?existingShares+shares:Math.max(0,existingShares-shares);
+    const newValue=newShares*cp;
+    const newPct=totalValue>0?newValue/totalValue:0;
+    newDiv.innerHTML=`This trade: <span class="mono" style="color:#e2e8f0">$${fmt(tradeValue)}</span> (<span class="mono" style="color:${AMBER}">${(tradePct*100).toFixed(2)}%</span> of portfolio) → New total: <span class="mono" style="color:#e2e8f0">${fmt(newShares,0)} shares</span> (<span class="mono" style="color:${BLUE}">${(newPct*100).toFixed(2)}%</span> of capital)`;
+  }else if(shares>0){
+    const ot=document.getElementById("t-ordertype")?.value||"VWAP";
+    const manualPrice=parseFloat(document.getElementById("t-price")?.value||document.getElementById("t-limit")?.value||0);
+    if(manualPrice>0){
+      const tradeValue=shares*manualPrice;const tradePct=totalValue>0?tradeValue/totalValue:0;
+      newDiv.innerHTML=`This trade: <span class="mono" style="color:#e2e8f0">$${fmt(tradeValue)}</span> (<span class="mono" style="color:${AMBER}">${(tradePct*100).toFixed(2)}%</span> of portfolio) — fetch quote for more detail`;
+    }else{
+      newDiv.innerHTML=`<span class="muted">Fetch quote to see % of portfolio</span>`;
+    }
+  }else{
+    newDiv.innerHTML="";
+  }
+}
+
+async function fetchQuote(){
+  const ticker=resolveAlias(document.getElementById("t-ticker")?.value||"");
+  const disp=document.getElementById("quote-display");
+  if(!ticker){disp.textContent="Enter ticker";return;}
+  disp.textContent="Loading...";
+  // Try Finnhub first, then FMP
+  let q=await finnhubQuote(ticker,APP.settings.finnhubKey);
+  if(!q){const fq=await fmpQuote(ticker,APP.settings.fmpKey);if(fq)q={current:fq.price,high:fq.dayHigh,low:fq.dayLow,open:fq.open,prevClose:fq.previousClose};}
+  if(q){
+    disp.innerHTML=`Last: <span style="color:#e2e8f0">$${fmt(q.current)}</span> | H: $${fmt(q.high)} L: $${fmt(q.low)}`;
+    const priceEl=document.getElementById("t-price");if(priceEl)priceEl.value=q.current;
+    if(!APP.prices[ticker])APP.prices[ticker]={};APP.prices[ticker].current=q.current;
+    _lastPriceUpdate=new Date();
+    wsSubscribe([ticker]); // subscribe for live updates
+    saveAll();updateTradeCalcs();
+  }else disp.textContent="Quote failed — check API keys in Settings";
+}
+
+function submitTrade(){
+  const port=PORTFOLIOS[APP.activeUserId];const ticker=resolveAlias(document.getElementById("t-ticker")?.value||"");
+  const side=document.getElementById("t-side")?.value||"buy";const shares=parseInt(document.getElementById("t-shares")?.value);
+  const ot=document.getElementById("t-ordertype")?.value||"VWAP";const notes="";
+  const statusEl=document.getElementById("trade-status");
+  if(!ticker||!shares||shares<=0){statusEl.innerHTML=`<div class="status-msg status-error">Enter valid ticker and shares.</div>`;return;}
+
+  const method=document.getElementById("t-method")?.value||"fifo";
+  const lotCheckboxes=document.querySelectorAll(".lot-checkbox:checked");
+  const specificLotIds=Array.from(lotCheckboxes).map(cb=>cb.dataset.lotid);
+
+  if(ot==="Market"){
+    const price=parseFloat(document.getElementById("t-price")?.value);
+    if(!price||price<=0){statusEl.innerHTML=`<div class="status-msg status-error">Enter a valid price or fetch quote.</div>`;return;}
+    const fillPrice=applySlippage(price,side,APP.settings.slippageBps);
+    if(side==="buy"){
+      const total=fillPrice*shares;if(total>port.cash){statusEl.innerHTML=`<div class="status-msg status-error">Insufficient cash. Need $${fmt(total)}, have $${fmt(port.cash)}.</div>`;return;}
+      const lot={id:gid(),ticker,shares,remainingShares:shares,originalShares:shares,entryPrice:fillPrice,entryDate:td(),orderType:"Market"};
+      port.lots.push(lot);port.cash-=total;
+      port.trades.push({id:gid(),ticker,side:"buy",shares,price:fillPrice,date:td(),time:new Date().toLocaleTimeString(),orderType:"Market",lotIds:[lot.id],notes});
+      statusEl.innerHTML=`<div class="status-msg status-success">Bought ${shares} ${ticker} @ $${fmt(fillPrice)} (Total: $${fmt(total)})</div>`;
+    }else{
+      const result=executeSell(port.lots,ticker,shares,fillPrice,method,specificLotIds);
+      if(result.error){statusEl.innerHTML=`<div class="status-msg status-error">${result.error}</div>`;return;}
+      port.cash+=fillPrice*shares;
+      port.trades.push({id:gid(),ticker,side:"sell",shares,price:fillPrice,date:td(),time:new Date().toLocaleTimeString(),orderType:"Market",fills:result.fills,realizedPL:result.realizedPL,costBasis:result.totalCostBasis,lotIds:result.fills.map(f=>f.lotId),notes});
+      statusEl.innerHTML=`<div class="status-msg status-success">Sold ${shares} ${ticker} @ $${fmt(fillPrice)} | P&L: ${fmtPL(result.realizedPL)}</div>`;
+    }
+    autoSnapshot();saveAll(true);
+  }else{
+    // VWAP or Limit → goes to pending orders
+    const limitPrice=ot==="Limit"?parseFloat(document.getElementById("t-limit")?.value):null;
+    if(ot==="Limit"&&(!limitPrice||limitPrice<=0)){statusEl.innerHTML=`<div class="status-msg status-error">Enter a valid limit price.</div>`;return;}
+    // Estimate check for buys
+    if(side==="buy"){
+      const estPrice=limitPrice||getCurrentPrice(ticker)||0;
+      if(estPrice>0&&estPrice*shares>port.cash){statusEl.innerHTML=`<div class="status-msg status-error">Estimated cost ~$${fmt(estPrice*shares)} exceeds cash $${fmt(port.cash)}.</div>`;return;}
+    }
+    port.orders.push({id:gid(),ticker,side,shares,orderType:ot,limitPrice:limitPrice||null,status:"pending",placedDate:td(),placedAt:new Date().toISOString(),notes,sellMethod:method,selectedLotIds:specificLotIds});
+    statusEl.innerHTML=`<div class="status-msg status-success">${ot} ${side} order placed: ${shares} ${ticker}${limitPrice?" @ $"+fmt(limitPrice):""} — awaiting settlement</div>`;
+    autoSnapshot();saveAll(true);
+  }
+  setTimeout(()=>{const el=document.getElementById("t-shares");if(el)el.value="";},100);
+  syncWebSocketSubscriptions();
+}
+
+// ---- POSITIONS ----
+let expandedPosition=null;
+let posSortCol="weight",posSortDir=-1; // default: sort by weight descending
+function sortPositions(col){if(posSortCol===col)posSortDir*=-1;else{posSortCol=col;posSortDir=-1;}render();}
+function renderPositions(){
+  const port=PORTFOLIOS[APP.activeUserId];const positions=getOpenPositions(port.lots);let posArr=Object.values(positions);
+  const totalInvested=posArr.reduce((s,p)=>{const cp=getCurrentPrice(p.ticker)||p.avgCost;return s+cp*p.totalShares;},0);
+  const totalValue=port.cash+totalInvested;
+
+  // Enrich with computed fields for sorting
+  posArr=posArr.map(p=>{
+    const cp=getCurrentPrice(p.ticker)||p.avgCost;const mv=cp*p.totalShares;const upl=(cp-p.avgCost)*p.totalShares;
+    const uplPct=p.totalCost>0?upl/p.totalCost:0;const weight=totalValue>0?mv/totalValue:0;const r=calcReturns(cp,p.ticker);
+    return{...p,cp,mv,upl,uplPct,weight,r};
+  });
+
+  // Sort
+  const getSortVal=(p)=>{
+    switch(posSortCol){
+      case"weight":return p.weight;case"upl":return p.upl;case"uplPct":return p.uplPct;
+      case"ytd":return p.r.ytdReturn||0;case"1w":return p.r.weekReturn||0;case"1m":return p.r.monthReturn||0;
+      case"mv":return p.mv;default:return p.weight;
+    }
+  };
+  posArr.sort((a,b)=>(getSortVal(a)-getSortVal(b))*posSortDir);
+
+  const sortIcon=(col)=>posSortCol===col?(posSortDir>0?" ↑":" ↓"):"";
+  let html=`<div class="card"><div class="card-title">Open Positions (${posArr.length})</div><div class="overflow-x"><table><thead><tr><th>Ticker</th><th style="cursor:pointer" onclick="sortPositions('weight')">% Capital${sortIcon('weight')}</th><th>Shares</th><th>Avg Cost</th><th>Current</th><th style="cursor:pointer" onclick="sortPositions('mv')">Mkt Value${sortIcon('mv')}</th><th style="cursor:pointer" onclick="sortPositions('upl')">Unrlzd P&L${sortIcon('upl')}</th><th style="cursor:pointer" onclick="sortPositions('uplPct')">Unrlzd %${sortIcon('uplPct')}</th><th style="cursor:pointer" onclick="sortPositions('ytd')">YTD${sortIcon('ytd')}</th><th style="cursor:pointer" onclick="sortPositions('1w')">1W${sortIcon('1w')}</th><th style="cursor:pointer" onclick="sortPositions('1m')">1M${sortIcon('1m')}</th><th>52W Hi</th><th>52W Lo</th><th>Lots</th></tr></thead><tbody>`;
+  if(!posArr.length)html+=`<tr class="empty-row"><td colspan="14">No open positions yet — place a trade!</td></tr>`;
+  else posArr.forEach(p=>{
+    html+=`<tr class="clickable" onclick="togglePosition('${p.ticker}')"><td class="bold blue">${esc(p.ticker)}</td><td class="mono-cell" style="color:${BLUE}">${(p.weight*100).toFixed(2)}%</td><td class="mono-cell">${fmt(p.totalShares,0)}</td><td class="mono-cell">$${fmt(p.avgCost)}</td><td class="mono-cell">$${fmt(p.cp)}</td><td class="mono-cell">$${fmt(p.mv)}</td><td class="mono-cell">${plSpan(p.upl)}</td><td class="mono-cell">${pctSpan(p.uplPct)}</td><td class="mono-cell">${pctSpan(p.r.ytdReturn)}</td><td class="mono-cell">${pctSpan(p.r.weekReturn)}</td><td class="mono-cell">${pctSpan(p.r.monthReturn)}</td><td class="mono-cell">${pctSpan(p.r.pctFrom52High)}</td><td class="mono-cell">${pctSpan(p.r.pctFrom52Low)}</td><td><button class="btn btn-ghost btn-sm">${p.lots.length} lots ${expandedPosition===p.ticker?"▲":"▼"}</button></td></tr>`;
+  });
+  html+=`</tbody></table></div></div>`;
+  if(expandedPosition&&positions[expandedPosition]){
+    html+=`<div class="card mt-12"><div class="card-subtitle blue">${esc(expandedPosition)} — Lot Detail</div><div class="overflow-x"><table><thead><tr><th>Lot ID</th><th>Entry Date</th><th>Entry Time</th><th>Entry Price</th><th>Original</th><th>Remaining</th><th>Order Type</th><th>Cost Basis</th><th>Unrealized P&L</th></tr></thead><tbody>`;
+    positions[expandedPosition].lots.forEach(l=>{const cp=getCurrentPrice(l.ticker)||l.entryPrice;const upl=(cp-l.entryPrice)*l.remainingShares;
+      // Find the trade that created this lot
+      const trade=port.trades.find(t=>t.lotIds&&t.lotIds.includes(l.id));
+      const entryTime=trade?.time||"";
+      html+=`<tr><td class="mono-cell">${l.id.slice(0,8)}</td><td class="mono-cell">${l.entryDate}</td><td class="text-sm muted">${entryTime}</td><td class="mono-cell">$${fmt(l.entryPrice)}</td><td class="mono-cell">${fmt(l.originalShares,0)}</td><td class="mono-cell">${fmt(l.remainingShares,0)}</td><td>${l.orderType}</td><td class="mono-cell">$${fmt(l.remainingShares*l.entryPrice)}</td><td class="mono-cell">${plSpan(upl)}</td></tr>`;});
+    html+=`</tbody></table></div></div>`;
+  }
+  return html;
+}
+
+// ---- CLOSED ----
+let expandedClosed=null;
+function renderClosed(){
+  const port=PORTFOLIOS[APP.activeUserId];const{allClosed,fullyClosed}=getClosedPositions(port.trades,port.lots);
+  const totalRealized=Object.values(allClosed).reduce((s,c)=>s+c.totalRealizedPL,0);
+  let html=`<div class="flex gap-12 flex-wrap">${statCard("Total Realized P&L",fmtPL(totalRealized),null,plC(totalRealized))}${statCard("Fully Closed",Object.keys(fullyClosed).length.toString())}${statCard("Partial Exits",(Object.keys(allClosed).length-Object.keys(fullyClosed).length).toString())}</div>`;
+  html+=`<div class="card mt-12"><div class="card-title">Closed / Exited Positions</div><div class="overflow-x"><table><thead><tr><th>Ticker</th><th>Shares Sold</th><th>Cost Basis</th><th>Proceeds</th><th>Realized P&L</th><th>Return %</th><th>Status</th></tr></thead><tbody>`;
+  const closedArr=Object.values(allClosed);
+  if(!closedArr.length)html+=`<tr class="empty-row"><td colspan="7">No closed positions yet</td></tr>`;
+  else closedArr.forEach(c=>{const ret=c.totalCostBasis>0?c.totalRealizedPL/c.totalCostBasis:0;const isFull=!!fullyClosed[c.ticker];
+    html+=`<tr class="clickable" onclick="toggleClosed('${c.ticker}')"><td class="bold" style="color:${isFull?'#94a3b8':BLUE}">${esc(c.ticker)}</td><td class="mono-cell">${fmt(c.totalSharesSold,0)}</td><td class="mono-cell">$${fmt(c.totalCostBasis)}</td><td class="mono-cell">$${fmt(c.totalProceeds)}</td><td class="mono-cell">${plSpan(c.totalRealizedPL)}</td><td class="mono-cell">${pctSpan(ret)}</td><td>${badge(isFull?"Closed":"Partial",isFull?"#94a3b8":AMBER)}</td></tr>`;});
+  html+=`</tbody></table></div></div>`;
+  if(expandedClosed&&allClosed[expandedClosed]){
+    html+=`<div class="card mt-12"><div class="card-subtitle">${esc(expandedClosed)} — Trade History</div><div class="overflow-x"><table><thead><tr><th>Date</th><th>Shares</th><th>Sell Price</th><th>Avg Cost/Share</th><th>P&L</th><th>Lots Used</th><th>Notes</th></tr></thead><tbody>`;
+    allClosed[expandedClosed].trades.forEach(t=>{const avgCost=t.fills?t.fills.reduce((s,f)=>s+f.costBasisPerShare*f.shares,0)/t.shares:0;
+      html+=`<tr><td>${t.date}</td><td class="mono-cell">${fmt(t.shares,0)}</td><td class="mono-cell">$${fmt(t.price)}</td><td class="mono-cell">$${fmt(avgCost)}</td><td class="mono-cell">${plSpan(t.realizedPL)}</td><td class="text-sm">${(t.fills||[]).map(f=>f.lotId?.slice(0,6)+"("+f.shares+")").join(", ")||"—"}</td><td class="text-sm">${esc(t.notes||"")}</td></tr>`;});
+    html+=`</tbody></table></div></div>`;
+  }
+  return html;
+}
+
+// ---- ORDERS ----
+function renderOrders(){
+  const port=PORTFOLIOS[APP.activeUserId];
+  const pending=port.orders.filter(o=>o.status==="pending");
+  const resolved=port.orders.filter(o=>o.status!=="pending").sort((a,b)=>(b.resolvedDate||b.placedDate).localeCompare(a.resolvedDate||a.placedDate));
+  const hasVWAP=pending.some(o=>o.orderType==="VWAP");
+
+  let html="";
+  if(pending.length>0&&hasVWAP)html+=`<div class="settle-banner"><div class="flex items-center justify-between gap-12"><div class="settle-banner-text"><strong>Ready to settle?</strong> After market close, click "Settle All VWAP" to fetch today's VWAP prices from FMP and fill pending VWAP orders.</div><button class="btn btn-amber" onclick="settleAllVWAP()">Settle All VWAP</button></div></div>`;
+
+  html+=`<div class="card"><div class="card-title">Pending Orders (${pending.length})</div><div class="overflow-x"><table><thead><tr><th>Ticker</th><th>Side</th><th>Shares</th><th>Type</th><th>Price/Target</th><th>Placed</th><th>Time</th><th>Notes</th><th>Actions</th></tr></thead><tbody>`;
+  if(!pending.length)html+=`<tr class="empty-row"><td colspan="9">No pending orders</td></tr>`;
+  else pending.forEach(o=>{
+    const placedTime=o.placedAt?new Date(o.placedAt).toLocaleTimeString():"";
+    html+=`<tr><td class="bold blue">${esc(o.ticker)}</td><td>${badge(o.side.toUpperCase(),o.side==="buy"?GREEN:RED)}</td><td class="mono-cell">${fmt(o.shares,0)}</td><td>${o.orderType}</td><td class="mono-cell">${o.limitPrice?"$"+fmt(o.limitPrice):o.orderType==="VWAP"?"EOD VWAP":"—"}</td><td>${o.placedDate}</td><td class="text-sm muted">${placedTime}</td><td class="text-sm">${esc(o.notes||"")}</td><td><div class="flex gap-4"><button class="btn btn-ghost btn-sm" onclick="fillOrder('${o.id}')">Fill Manually</button><button class="btn btn-danger btn-sm" onclick="cancelOrder('${o.id}')">Cancel</button></div></td></tr>`;
+  });
+  html+=`</tbody></table></div></div>`;
+
+  if(resolved.length){
+    html+=`<div class="card mt-12"><div class="card-subtitle">Order History</div><div class="overflow-x"><table><thead><tr><th>Ticker</th><th>Side</th><th>Shares</th><th>Type</th><th>Status</th><th>Fill Price</th><th>Placed</th><th>Filled</th></tr></thead><tbody>`;
+    resolved.forEach(o=>{const filledTime=o.filledAt?new Date(o.filledAt).toLocaleString():(o.resolvedDate||"—");html+=`<tr><td>${esc(o.ticker)}</td><td>${badge(o.side.toUpperCase(),o.side==="buy"?GREEN:RED)}</td><td class="mono-cell">${fmt(o.shares,0)}</td><td>${o.orderType}</td><td>${badge(o.status.toUpperCase(),o.status==="filled"?GREEN:"#94a3b8")}</td><td class="mono-cell">${o.fillPrice?"$"+fmt(o.fillPrice):"—"}</td><td>${o.placedDate}${o.placedAt?" "+new Date(o.placedAt).toLocaleTimeString():""}</td><td class="text-sm">${filledTime}</td></tr>`;});
+    html+=`</tbody></table></div></div>`;
+  }
+  return html;
+}
+
+async function settleAllVWAP(){
+  const port=PORTFOLIOS[APP.activeUserId];const pending=port.orders.filter(o=>o.status==="pending"&&o.orderType==="VWAP");
+  if(!pending.length){alert("No VWAP orders to settle.");return;}
+  if(!APP.settings.fmpKey){alert("Set your FMP API key in Settings first.");return;}
+
+  const tickers=[...new Set(pending.map(o=>o.ticker))];
+  const statusDiv=document.querySelector(".settle-banner-text");
+  if(statusDiv)statusDiv.innerHTML="<strong>Settling...</strong> Fetching VWAP prices...";
+  let settled=0;
+
+  for(const ticker of tickers){
+    const fmpData=await fmpDailyPrice(ticker,APP.settings.fmpKey,td(),td());
+    let vwap=null;
+    if(fmpData&&fmpData.length>0){vwap=fmpData[0].vwap||((fmpData[0].high+fmpData[0].low+fmpData[0].close)/3);
+      // Store price data
+      if(!APP.prices[ticker])APP.prices[ticker]={};APP.prices[ticker].current=fmpData[0].close;
+      APP.prices[ticker][fmpData[0].date||td()]={open:fmpData[0].open,high:fmpData[0].high,low:fmpData[0].low,close:fmpData[0].close,volume:fmpData[0].volume,vwap:vwap};
+    }
+    if(!vwap){if(statusDiv)statusDiv.innerHTML+=`<br>Could not get VWAP for ${ticker} — fill manually.`;continue;}
+
+    const tickerOrders=pending.filter(o=>o.ticker===ticker);
+    for(const order of tickerOrders){
+      if(order.side==="buy"){
+        const total=vwap*order.shares;
+        if(total>port.cash){if(statusDiv)statusDiv.innerHTML+=`<br>Insufficient cash for ${ticker} buy.`;continue;}
+        const lot={id:gid(),ticker,shares:order.shares,remainingShares:order.shares,originalShares:order.shares,entryPrice:vwap,entryDate:td(),orderType:"VWAP"};
+        port.lots.push(lot);port.cash-=total;
+        port.trades.push({id:gid(),ticker,side:"buy",shares:order.shares,price:vwap,date:td(),time:"EOD",orderType:"VWAP",lotIds:[lot.id],notes:order.notes});
+      }else{
+        const result=executeSell(port.lots,ticker,order.shares,vwap,order.sellMethod||"fifo",order.selectedLotIds||[]);
+        if(result.error){if(statusDiv)statusDiv.innerHTML+=`<br>${ticker} sell error: ${result.error}`;continue;}
+        port.cash+=vwap*order.shares;
+        port.trades.push({id:gid(),ticker,side:"sell",shares:order.shares,price:vwap,date:td(),time:"EOD",orderType:"VWAP",fills:result.fills,realizedPL:result.realizedPL,costBasis:result.totalCostBasis,lotIds:result.fills.map(f=>f.lotId),notes:order.notes});
+      }
+      order.status="filled";order.fillPrice=vwap;order.resolvedDate=td();order.filledAt=new Date().toISOString();settled++;
+    }
+    await new Promise(r=>setTimeout(r,250));
+  }
+  autoSnapshot();saveAll(true);
+  if(statusDiv)statusDiv.innerHTML=`<strong>Done!</strong> Settled ${settled} order${settled!==1?'s':''} at VWAP.`;
+  syncWebSocketSubscriptions();
+  setTimeout(()=>render(),1500);
+}
+
+function cancelOrder(id){const port=PORTFOLIOS[APP.activeUserId];const o=port.orders.find(o=>o.id===id);if(o){o.status="cancelled";o.resolvedDate=td();}saveAll();render();}
+
+function fillOrder(id){
+  const port=PORTFOLIOS[APP.activeUserId];const order=port.orders.find(o=>o.id===id);if(!order)return;
+  const input=prompt(`Fill ${order.shares} ${order.ticker} @ price:`,order.limitPrice||getCurrentPrice(order.ticker)||"");
+  if(!input)return;const price=parseFloat(input);if(!price||price<=0)return;
+  if(order.side==="buy"){
+    const total=price*order.shares;if(total>port.cash){alert("Insufficient cash.");return;}
+    const lot={id:gid(),ticker:order.ticker,shares:order.shares,remainingShares:order.shares,originalShares:order.shares,entryPrice:price,entryDate:td(),orderType:order.orderType};
+    port.lots.push(lot);port.cash-=total;
+    port.trades.push({id:gid(),ticker:order.ticker,side:"buy",shares:order.shares,price,date:td(),time:new Date().toLocaleTimeString(),orderType:order.orderType,lotIds:[lot.id],notes:order.notes});
+  }else{
+    const result=executeSell(port.lots,order.ticker,order.shares,price,order.sellMethod||"fifo",order.selectedLotIds||[]);
+    if(result.error){alert(result.error);return;}
+    port.cash+=price*order.shares;
+    port.trades.push({id:gid(),ticker:order.ticker,side:"sell",shares:order.shares,price,date:td(),time:new Date().toLocaleTimeString(),orderType:order.orderType,fills:result.fills,realizedPL:result.realizedPL,costBasis:result.totalCostBasis,lotIds:result.fills.map(f=>f.lotId),notes:order.notes});
+  }
+  order.status="filled";order.fillPrice=price;order.resolvedDate=td();order.filledAt=new Date().toISOString();autoSnapshot();saveAll(true);render();
+}
+
+// ---- HISTORY ----
+function renderHistory(){
+  const port=PORTFOLIOS[APP.activeUserId];const trades=[...port.trades].sort((a,b)=>(b.date+(b.time||"")).localeCompare(a.date+(a.time||"")));
+  let html=`<div class="card"><div class="card-title">Full Trade Log (${trades.length} trades)</div><div class="overflow-x"><table><thead><tr><th>Date</th><th>Time</th><th>Ticker</th><th>Side</th><th>Shares</th><th>Price</th><th>Total</th><th>Type</th><th>P&L</th></tr></thead><tbody>`;
+  if(!trades.length)html+=`<tr class="empty-row"><td colspan="9">No trades yet</td></tr>`;
+  else trades.forEach(t=>{html+=`<tr><td>${t.date}</td><td class="text-sm muted">${t.time||""}</td><td class="bold">${esc(t.ticker)}</td><td>${badge(t.side.toUpperCase(),t.side==="buy"?GREEN:RED)}</td><td class="mono-cell">${fmt(t.shares,0)}</td><td class="mono-cell">$${fmt(t.price)}</td><td class="mono-cell">$${fmt(t.shares*t.price)}</td><td>${t.orderType||"Market"}</td><td class="mono-cell">${t.side==="sell"?plSpan(t.realizedPL):"—"}</td></tr>`;});
+  html+=`</tbody></table></div></div>`;return html;
+}
+
+// ---- SETTINGS ----
+function renderSettings(){
+  const port=PORTFOLIOS[APP.activeUserId];
+  let html=`<div class="card"><div class="card-title">API Configuration</div><div class="flex gap-12 items-end flex-wrap"><div class="input-group" style="flex:1;min-width:220px"><label class="input-label">Finnhub API Key (live quotes via WebSocket)</label><input class="input-field" id="s-finnhub" value="${esc(APP.settings.finnhubKey)}" placeholder="Free from finnhub.io" style="width:100%" onchange="APP.settings.finnhubKey=this.value;saveAll();if(_ws)_ws.close();startAutoRefresh();syncWebSocketSubscriptions()"></div><div class="input-group" style="flex:1;min-width:220px"><label class="input-label">FMP API Key (VWAP + historical)</label><input class="input-field" id="s-fmp" value="${esc(APP.settings.fmpKey||'')}" placeholder="Free from financialmodelingprep.com" style="width:100%" onchange="APP.settings.fmpKey=this.value;saveAll()"></div><div class="input-group" style="width:100px"><label class="input-label">Slippage (bps)</label><input class="input-field" type="number" value="${APP.settings.slippageBps}" style="width:100px" onchange="APP.settings.slippageBps=parseInt(this.value)||0;saveAll()"></div></div>`;
+  // Connection status
+  const wsStatus=_ws&&_ws.readyState===WebSocket.OPEN?`<span style="color:${GREEN}">● Connected</span> — ${_wsSubscribed.size} symbols streaming`:`<span style="color:${RED}">● Disconnected</span>${APP.settings.finnhubKey?" — reconnecting...":""}`;
+  html+=`<div class="text-xs muted mt-8">WebSocket: ${wsStatus} | Last update: ${getLastUpdateStr()}</div></div>`;
+
+  html+=`<div class="card mt-12"><div class="card-title">Price Management</div><div class="flex gap-8 flex-wrap mb-12"><button class="btn btn-primary" onclick="refreshAllPrices()">Refresh Live Prices</button><button class="btn btn-ghost" onclick="fetchHistorical()">Fetch 1Y Historical Data</button><button class="btn btn-ghost" onclick="takeSnapshot()">Take Daily Snapshot</button></div><div id="fetch-status" class="text-sm muted"></div><div class="text-xs muted mt-8">Cached tickers: ${Object.keys(APP.prices).filter(k=>APP.prices[k].current).length} | Snapshots: ${port.snapshots.length}</div></div>`;
+
+  html+=`<div class="card mt-12"><div class="card-title">Manual Price Update</div><div class="flex gap-12 items-end flex-wrap"><div class="input-group"><label class="input-label">Ticker</label><input class="input-field" id="s-mp-ticker" placeholder="AAPL" style="width:100px;text-transform:uppercase"></div><div class="input-group"><label class="input-label">Price</label><input class="input-field" id="s-mp-price" type="number" placeholder="185.00" style="width:120px"></div><button class="btn btn-ghost" onclick="manualPriceUpdate()">Update</button></div></div>`;
+
+  html+=`<div class="card mt-12"><div class="card-title">Benchmarks</div><div class="flex gap-8 flex-wrap mb-12">${port.benchmarks.map(bm=>`<div class="flex items-center gap-4">${badge(bm,BLUE)}<button class="btn btn-ghost btn-sm" onclick="removeBenchmark('${bm}')">×</button></div>`).join("")}</div><div class="flex gap-8 items-end"><div class="input-group"><label class="input-label">Add Benchmark</label><input class="input-field" id="s-newbm" placeholder="IWM" style="width:100px;text-transform:uppercase"></div><button class="btn btn-ghost btn-sm" onclick="addBenchmark()">Add</button></div></div>`;
+
+  html+=`<div class="flex gap-16 flex-wrap mt-12"><div class="card" style="flex:1;min-width:280px"><div class="card-subtitle">Record Dividend</div><div class="flex gap-8 flex-wrap items-end"><div class="input-group"><label class="input-label">Ticker</label><input class="input-field" id="s-div-ticker" placeholder="AAPL" style="width:80px"></div><div class="input-group"><label class="input-label">$/Share</label><input class="input-field" id="s-div-amt" type="number" placeholder="0.25" style="width:80px"></div><div class="input-group"><label class="input-label">Ex-Date</label><input class="input-field" id="s-div-date" type="date" value="${td()}" style="width:140px"></div><button class="btn btn-success btn-sm" onclick="addDividend()">Record</button></div></div>`;
+  html+=`<div class="card" style="flex:1;min-width:280px"><div class="card-subtitle">Apply Stock Split</div><div class="flex gap-8 flex-wrap items-end"><div class="input-group"><label class="input-label">Ticker</label><input class="input-field" id="s-split-ticker" placeholder="NVDA" style="width:80px"></div><div class="input-group"><label class="input-label">Ratio</label><input class="input-field" id="s-split-ratio" placeholder="10:1" style="width:80px"></div><div class="input-group"><label class="input-label">Date</label><input class="input-field" id="s-split-date" type="date" value="${td()}" style="width:140px"></div><button class="btn btn-amber btn-sm" onclick="applySplit()">Apply</button></div></div></div>`;
+
+  html+=`<div class="card mt-12"><div class="card-subtitle">Ticker Rename / Alias</div><div class="flex gap-8 items-end flex-wrap"><div class="input-group"><label class="input-label">Old Ticker</label><input class="input-field" id="s-alias-old" placeholder="FB" style="width:80px"></div><span class="muted" style="padding:8px 0">→</span><div class="input-group"><label class="input-label">New Ticker</label><input class="input-field" id="s-alias-new" placeholder="META" style="width:80px"></div><button class="btn btn-ghost btn-sm" onclick="addAlias()">Set Alias</button></div>${Object.keys(APP.aliases).length?`<div class="text-sm muted mt-8">Active: ${Object.entries(APP.aliases).map(([k,v])=>k+"→"+v).join(", ")}</div>`:""}</div>`;
+
+  // Cloud Sync & Data
+  const bStatus=getBackupStatus();
+  html+=`<div class="card mt-12"><div class="card-title">Cloud Sync & Data</div>`;
+  html+=`<div style="background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:13px"><span style="color:${GREEN}">● Firebase Connected</span> — data syncs automatically across all your devices. No manual saving needed.</div>`;
+  html+=`<div class="flex gap-8 flex-wrap mb-12"><button class="btn btn-success" onclick="exportToExcel()">Export to Excel</button><button class="btn btn-success" onclick="downloadBackup(false)">Download JSON Backup</button><button class="btn btn-ghost" onclick="triggerBackupImport()">Import Backup</button></div>`;
+  html+=`<div class="backup-info"><div class="backup-info-row"><span class="backup-info-label">Storage</span><span class="backup-info-value">Firebase Cloud + Local Cache</span></div><div class="backup-info-row"><span class="backup-info-label">Total trades</span><span class="backup-info-value">${port.trades.length}</span></div><div class="backup-info-row"><span class="backup-info-label">Data size</span><span class="backup-info-value">${(JSON.stringify({app:APP,portfolios:PORTFOLIOS}).length/1024).toFixed(1)} KB</span></div><div class="backup-info-row"><span class="backup-info-label">Last JSON backup</span><span class="backup-info-value">${APP.lastBackupDate||'Never'}</span></div></div>`;
+  html+=`<div class="flex gap-8 mt-12"><button class="btn btn-danger" onclick="resetAll()">Reset All Data</button></div></div>`;
+  return html;
+}
+
+function setStatus(msg){const el=document.getElementById("fetch-status");if(el)el.textContent=msg;}
+
+async function refreshAllPrices(){
+  const port=PORTFOLIOS[APP.activeUserId];const positions=getOpenPositions(port.lots);
+  const tickers=[...new Set([...Object.keys(positions),...port.benchmarks])];
+  if(!tickers.length){setStatus("No tickers to refresh.");return;}
+  setStatus("Fetching prices...");let fetched=0;
+  for(const tk of tickers){
+    let q=await finnhubQuote(tk,APP.settings.finnhubKey);
+    if(!q){const fq=await fmpQuote(tk,APP.settings.fmpKey);if(fq)q={current:fq.price,high:fq.dayHigh,low:fq.dayLow,open:fq.open};}
+    if(q){if(!APP.prices[tk])APP.prices[tk]={};APP.prices[tk].current=q.current;APP.prices[tk][td()]={open:q.open||q.current,high:q.high||q.current,low:q.low||q.current,close:q.current,volume:0};fetched++;}
+    await new Promise(r=>setTimeout(r,200));
+  }
+  setStatus(`Updated ${fetched}/${tickers.length} tickers.`);saveAll();
+}
+
+async function fetchHistorical(){
+  if(!APP.settings.fmpKey){setStatus("Set FMP API key first.");return;}
+  const port=PORTFOLIOS[APP.activeUserId];const positions=getOpenPositions(port.lots);
+  const tickers=[...new Set([...Object.keys(positions),...port.benchmarks])];
+  setStatus("Fetching historical data...");const yearAgo=new Date();yearAgo.setFullYear(yearAgo.getFullYear()-1);const fromStr=yearAgo.toISOString().split("T")[0];let fetched=0;
+  for(const tk of tickers){
+    const data=await fmpDailyPrice(tk,APP.settings.fmpKey,fromStr,td());
+    if(data&&data.length){if(!APP.prices[tk])APP.prices[tk]={};for(const bar of data)APP.prices[tk][bar.date]={open:bar.open,high:bar.high,low:bar.low,close:bar.close,volume:bar.volume,vwap:bar.vwap};APP.prices[tk].current=data[0].close;fetched++;}
+    await new Promise(r=>setTimeout(r,300));
+  }
+  for(const bm of port.benchmarks){if(APP.prices[bm]){if(!port.benchmarkPrices[bm])port.benchmarkPrices[bm]={};for(const[date,bar]of Object.entries(APP.prices[bm]))if(date.match(/^\d{4}-\d{2}-\d{2}$/))port.benchmarkPrices[bm][date]=bar;}}
+  setStatus(`Loaded historical data for ${fetched}/${tickers.length} tickers.`);saveAll();
+}
+
+function takeSnapshot(){
+  const port=PORTFOLIOS[APP.activeUserId];const positions=getOpenPositions(port.lots);
+  const inv=Object.values(positions).reduce((s,p)=>{const cp=getCurrentPrice(p.ticker)||p.avgCost;return s+cp*p.totalShares;},0);
+  const snap={date:td(),value:port.cash+inv,cash:port.cash,invested:inv};
+  const idx=port.snapshots.findIndex(s=>s.date===td());if(idx>=0)port.snapshots[idx]=snap;else port.snapshots.push(snap);
+  setStatus("Snapshot saved for "+td());saveAll();
+}
+function manualPriceUpdate(){
+  const ticker=resolveAlias(document.getElementById("s-mp-ticker")?.value||"");const price=parseFloat(document.getElementById("s-mp-price")?.value);
+  if(!ticker||!price||price<=0){setStatus("Enter valid ticker and price.");return;}
+  if(!APP.prices[ticker])APP.prices[ticker]={};APP.prices[ticker].current=price;APP.prices[ticker][td()]={...(APP.prices[ticker][td()]||{}),close:price};
+  setStatus(`Updated ${ticker} to $${fmt(price)}`);saveAll();
+}
+function addBenchmark(){const v=document.getElementById("s-newbm")?.value?.toUpperCase();if(v){PORTFOLIOS[APP.activeUserId].benchmarks.push(v);saveAll();render();}}
+function removeBenchmark(bm){PORTFOLIOS[APP.activeUserId].benchmarks=PORTFOLIOS[APP.activeUserId].benchmarks.filter(b=>b!==bm);saveAll();render();}
+function addDividend(){
+  const port=PORTFOLIOS[APP.activeUserId];const ticker=resolveAlias(document.getElementById("s-div-ticker")?.value||"");const amt=parseFloat(document.getElementById("s-div-amt")?.value);const date=document.getElementById("s-div-date")?.value||td();
+  if(!ticker||!amt){setStatus("Enter ticker and amount.");return;}const positions=getOpenPositions(port.lots);const pos=positions[ticker];if(!pos){setStatus("No open position for "+ticker);return;}
+  const total=amt*pos.totalShares;port.dividends.push({id:gid(),ticker,date,amountPerShare:amt,sharesHeld:pos.totalShares,totalAmount:total});port.cash+=total;
+  setStatus(`Recorded $${fmt(total)} dividend from ${ticker}`);saveAll();
+}
+function applySplit(){
+  const port=PORTFOLIOS[APP.activeUserId];const ticker=resolveAlias(document.getElementById("s-split-ticker")?.value||"");const ratio=document.getElementById("s-split-ratio")?.value||"";const date=document.getElementById("s-split-date")?.value||td();
+  const parts=ratio.split(":").map(Number);if(!ticker||parts.length!==2||parts.some(isNaN)||parts.some(n=>n<=0)){setStatus("Invalid. Use format like 10:1");return;}
+  const mult=parts[0]/parts[1];
+  port.lots.forEach(l=>{if(l.ticker===ticker){l.originalShares=Math.round(l.originalShares*mult);l.remainingShares=Math.round(l.remainingShares*mult);l.entryPrice=l.entryPrice/mult;}});
+  port.orders.forEach(o=>{if(o.ticker===ticker&&o.status==="pending"){o.shares=Math.round(o.shares*mult);if(o.limitPrice)o.limitPrice/=mult;}});
+  port.corporateActions.push({id:gid(),ticker,type:"split",date,details:`${parts[0]}:${parts[1]} split`});
+  setStatus(`Applied ${ratio} split on ${ticker}.`);saveAll();render();
+}
+function addAlias(){
+  const port=PORTFOLIOS[APP.activeUserId];const oldT=document.getElementById("s-alias-old")?.value?.toUpperCase();const newT=document.getElementById("s-alias-new")?.value?.toUpperCase();
+  if(!oldT||!newT)return;APP.aliases[oldT]=newT;
+  [port.lots,port.trades,port.orders,port.dividends].forEach(arr=>arr.forEach(item=>{if(item.ticker===oldT)item.ticker=newT;}));
+  port.corporateActions.push({id:gid(),ticker:newT,type:"rename",date:td(),details:`${oldT} → ${newT}`});
+  setStatus(`Alias: ${oldT} → ${newT}`);saveAll();render();
+}
+function resetAll(){if(confirm("Reset ALL data? This cannot be undone.")){localStorage.removeItem("paper-trading-v4");localStorage.removeItem("paper-trading-v3");db.ref("data").remove();APP=getDefaultState();PORTFOLIOS={};render();}}
+
+// ============================================================================
+// GLOBAL HANDLERS
+// ============================================================================
+function setTab(t){activeTab=t;render()}
+function switchUser(){APP.activeUserId=null;saveAll();render()}
+function selectUser(id){APP.activeUserId=id;saveAll();render()}
+function createUser(){const name=document.getElementById("new-name")?.value;const capital=parseFloat(document.getElementById("new-capital")?.value);if(!name||!capital)return;const id=gid();APP.users[id]={name,startingCapital:capital,createdAt:td()};APP.activeUserId=id;PORTFOLIOS[id]=getDefaultPortfolio(capital);saveAll();render();}
+function togglePosition(tk){expandedPosition=expandedPosition===tk?null:tk;render()}
+function toggleClosed(tk){expandedClosed=expandedClosed===tk?null:tk;render()}
+
+// ============================================================================
+// INIT
+// ============================================================================
+// Show loading screen immediately, then load data
+document.getElementById("app").innerHTML=`<div style="display:flex;align-items:center;justify-content:center;min-height:100vh;color:#64748b;font-family:'Outfit',sans-serif"><div style="text-align:center"><div style="font-size:24px;font-weight:800;margin-bottom:12px"><span style="color:#3b82f6">◆</span> Paper Trading</div><div>Loading data...</div></div></div>`;
+
+(async function init(){
+  // Try Firebase first, fall back to localStorage
+  const fbLoaded=await loadFromFirebase();
+  if(!fbLoaded){
+    const lsLoaded=loadFromLocalStorage();
+    if(!lsLoaded)APP=getDefaultState();
+  }
+  // Migrate settings
+  if(APP&&!APP.settings.hasOwnProperty('autoBackup'))APP.settings.autoBackup=true;
+  if(APP&&!APP.settings.hasOwnProperty('autoBackupAfterTrades'))APP.settings.autoBackupAfterTrades=true;
+  if(APP&&!APP.settings.hasOwnProperty('fmpKey'))APP.settings.fmpKey="";
+  if(APP&&!APP.hasOwnProperty('lastBackupDate'))APP.lastBackupDate=null;
+  if(APP&&!APP.hasOwnProperty('tradesSinceBackup'))APP.tradesSinceBackup=0;
+
+  render();
+  // Start cross-device sync listener
+  startFirebaseSync();
+  // Start live price streaming
+  startAutoRefresh();
+  // Auto-fetch historical + initial prices
+  setTimeout(async()=>{
+    await autoFetchHistoricalIfNeeded();
+    if(APP.activeUserId){
+      const port=PORTFOLIOS[APP.activeUserId];if(port){
+        const positions=getOpenPositions(port.lots);
+        const tickers=[...new Set([...Object.keys(positions),...port.benchmarks])];
+        for(const tk of tickers){
+          if(APP.prices[tk]?.current)continue;
+          let q=await finnhubQuote(tk,APP.settings.finnhubKey);
+          if(!q){const fq=await fmpQuote(tk,APP.settings.fmpKey);if(fq)q={current:fq.price};}
+          if(q){if(!APP.prices[tk])APP.prices[tk]={};APP.prices[tk].current=q.current;_lastPriceUpdate=new Date();}
+          await new Promise(r=>setTimeout(r,200));
+        }
+        saveAll();render();syncWebSocketSubscriptions();
+      }
+    }
+  },1500);
+})();
+</script>
+</body>
+</html>
