@@ -6,8 +6,7 @@
 <title>Paper Trading Platform</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Outfit',system-ui,sans-serif;background:#0c1222;color:#e2e8f0;min-height:100vh}
@@ -96,22 +95,13 @@ const td=()=>new Date().toISOString().split("T")[0];
 const esc=(s)=>{const d=document.createElement('div');d.textContent=String(s||'');return d.innerHTML};
 
 // ============================================================================
-// FIREBASE INIT
+// SUPABASE INIT
 // ============================================================================
-const firebaseConfig={
-  apiKey:"AIzaSyA0NWhwvJxuk2aiaL5xtjZB-k_aZeeSjZg",
-  authDomain:"paperport-8cd1e.firebaseapp.com",
-  databaseURL:"https://paperport-8cd1e-default-rtdb.firebaseio.com",
-  projectId:"paperport-8cd1e",
-  storageBucket:"paperport-8cd1e.firebasestorage.app",
-  messagingSenderId:"114760712997",
-  appId:"1:114760712997:web:b77b41a64af9e9dad150cc"
-};
-firebase.initializeApp(firebaseConfig);
-const db=firebase.database();
-let _fbSaveTimer=null;
-let _fbInitialized=false;
-let _fbSyncing=false;
+const SUPABASE_URL = "https://unizbajgolxjrrzkqfqf.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_EBqPMhh2sx4CN8XIoJVKUg_rtuZgqqz";
+const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let _sbSaveTimer=null;
+let _sbSyncing=false;
 
 // ============================================================================
 // STATE
@@ -147,19 +137,18 @@ function saveAll(isTrade=false){
   }catch(e){console.error("Save failed",e)}
 }
 
-// Load: try Firebase first, fall back to localStorage
-async function loadFromFirebase(){
+// Load: try Supabase first, fall back to localStorage
+async function loadFromSupabase(){
   try{
-    const snapshot=await db.ref("data").once("value");
-    const data=snapshot.val();
+    const{data,error}=await supabaseClient.from("trading_data").select("*").eq("id","main").single();
+    if(error){console.error("Supabase load failed:",error);return false;}
     if(data&&data.app){
       APP=data.app;PORTFOLIOS=data.portfolios||{};
-      // Update local cache
       localStorage.setItem("paper-trading-v4",JSON.stringify({app:APP,portfolios:PORTFOLIOS}));
-      console.log("Loaded from Firebase");
+      console.log("Loaded from Supabase");
       return true;
     }
-  }catch(e){console.error("Firebase load failed:",e)}
+  }catch(e){console.error("Supabase load error:",e)}
   return false;
 }
 
@@ -171,23 +160,19 @@ function loadFromLocalStorage(){
   return false;
 }
 
-// Listen for real-time changes from other devices
-function startFirebaseSync(){
-  db.ref("data").on("value",(snapshot)=>{
-    if(_fbSyncing)return; // ignore our own writes
-    const data=snapshot.val();
-    if(!data||!data.app)return;
-    // Check if this is newer data from another device
-    const currentLocal=localStorage.getItem("paper-trading-v4");
-    const localParsed=currentLocal?JSON.parse(currentLocal):null;
-    if(data.lastSaved&&localParsed){
-      // Only update if Firebase data is newer
+// Listen for real-time changes from other devices via Supabase Realtime
+function startSupabaseSync(){
+  supabaseClient.channel("trading_data_changes")
+    .on("postgres_changes",{event:"UPDATE",schema:"public",table:"trading_data",filter:"id=eq.main"},(payload)=>{
+      if(_sbSyncing)return;
+      const data=payload.new;
+      if(!data||!data.app)return;
       APP=data.app;PORTFOLIOS=data.portfolios||{};
       localStorage.setItem("paper-trading-v4",JSON.stringify({app:APP,portfolios:PORTFOLIOS}));
-      console.log("Synced from another device");
+      console.log("Synced from another device via Supabase");
       render();
-    }
-  });
+    })
+    .subscribe();
 }
 
 // ============================================================================
@@ -1287,7 +1272,7 @@ document.getElementById("app").innerHTML=`<div style="display:flex;align-items:c
 
 (async function init(){
   // Try Firebase first, fall back to localStorage
-  const fbLoaded=await loadFromFirebase();
+  const fbLoaded=await loadFromSupabase();
   if(!fbLoaded){
     const lsLoaded=loadFromLocalStorage();
     if(!lsLoaded)APP=getDefaultState();
@@ -1301,7 +1286,7 @@ document.getElementById("app").innerHTML=`<div style="display:flex;align-items:c
 
   render();
   // Start cross-device sync listener
-  startFirebaseSync();
+  startSupabaseSync();
   // Start live price streaming
   startAutoRefresh();
   // Auto-fetch historical + initial prices
