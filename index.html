@@ -443,11 +443,16 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
       <div id="tab-hist" class="tab-panel">
         <table class="dt">
           <thead><tr>
-            <th>Symbol</th><th>Side</th><th>Type</th><th>Qty Ordered</th>
-            <th>Qty Filled</th><th>Fill Price</th><th>Notional</th>
-            <th>Status</th><th>Submitted</th><th>Filled At</th>
+            <th>Symbol</th><th>Side</th><th>Type</th>
+            <th>Qty Ordered</th><th>Qty Filled</th>
+            <th>Limit $</th><th>Stop $</th><th>Fill Price</th>
+            <th>Notional (Display)</th><th>TIF</th>
+            <th>Status</th>
+            <th>Created</th><th>Submitted</th><th>Filled At</th>
+            <th>Canceled / Expired</th>
+            <th>Order ID</th>
           </tr></thead>
-          <tbody id="hist-body"><tr class="loading-row"><td colspan="10">Loading…</td></tr></tbody>
+          <tbody id="hist-body"><tr class="loading-row"><td colspan="16">Loading…</td></tr></tbody>
         </table>
         <div id="hist-empty" class="empty-state" style="display:none">
           <div class="empty-icon">📋</div><div>No order history yet</div>
@@ -463,10 +468,16 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
             <button class="p-btn on" data-p="1M" onclick="loadChart('1M')">1M</button>
             <button class="p-btn" data-p="3M" onclick="loadChart('3M')">3M</button>
             <button class="p-btn" data-p="6M" onclick="loadChart('6M')">6M</button>
+            <button class="p-btn" data-p="YTD" onclick="loadChart('YTD')">YTD</button>
             <button class="p-btn" data-p="1A" onclick="loadChart('1A')">1Y</button>
-            <label class="bench-lbl">
-              <input type="checkbox" id="spy-chk" checked onchange="reloadChart()"> SPY Benchmark
-            </label>
+            <div style="margin-left:auto;display:flex;align-items:center;gap:12px">
+              <label class="bench-lbl">
+                <input type="checkbox" id="spy-chk" checked onchange="reloadChart()"> SPY
+              </label>
+              <label class="bench-lbl">
+                <input type="checkbox" id="qqq-chk" checked onchange="reloadChart()"> QQQ
+              </label>
+            </div>
           </div>
           <div id="chart-msg"></div>
           <div id="chart-canvas-wrap"><canvas id="perf-chart"></canvas></div>
@@ -536,14 +547,14 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
           </div>
           <table class="dt">
             <thead><tr>
-              <th>#</th><th>Date</th><th>Time</th><th>Symbol</th>
-              <th>Side</th><th>Type</th>
-              <th>Qty (Display)</th><th>Fill Price</th>
-              <th>Notional (Display)</th>
-              <th>Alpaca Order ID</th><th>Source</th>
+              <th>#</th><th>Date</th><th>Symbol</th><th>Side</th><th>Type</th><th>TIF</th>
+              <th>Qty (Display)</th><th>Limit $</th><th>Stop $</th>
+              <th>Fill Price</th><th>Notional (Display)</th>
+              <th>Created At</th><th>Submitted At</th><th>Filled At</th><th>Canceled / Expired</th>
+              <th>Alpaca Order ID</th>
             </tr></thead>
             <tbody id="ledger-body">
-              <tr class="loading-row"><td colspan="11">Loading ledger…</td></tr>
+              <tr class="loading-row"><td colspan="16">Loading ledger…</td></tr>
             </tbody>
           </table>
           <div id="ledger-empty" class="empty-state" style="display:none">
@@ -727,7 +738,9 @@ async function switchPortfolio(id) {
   loadDailyLog();
   loadLedger();
   await pullDataFromGitHub();
+  fullRefreshCount = 0;
   await refresh();
+  scheduleNextRefresh();
   renderPortDropdown();
 }
 
@@ -845,23 +858,62 @@ function today() { return new Date().toISOString().split('T')[0]; }
 // ══════════════════════════════════════
 // DATA LOADING
 // ══════════════════════════════════════
-async function loadAccount()   { account   = await tapi('/v2/account');                                         renderAccount(); }
-async function loadPositions() { positions = (await tapi('/v2/positions')) || [];                               renderPositions(); }
-async function loadOrders() {
-  const all = (await tapi('/v2/orders?status=all&limit=500&nested=true')) || [];
+async function loadAccount()   { account   = await tapi('/v2/account'); renderAccount(); }
+async function loadPositions() { positions = (await tapi('/v2/positions')) || []; renderPositions(); }
+
+// Open orders polled every refresh. Closed orders only fetched when needed.
+async function loadOrders(includeClosed = false) {
   const pend = new Set(['new','partially_filled','accepted','pending_new','accepted_for_bidding','held']);
-  openOrders   = all.filter(o =>  pend.has(o.status));
-  closedOrders = all.filter(o => !pend.has(o.status));
-  detectNewFills(all);   // ← auto-capture any new fills into our ledger
+  if (includeClosed) {
+    // Full fetch: open + closed (on load, manual refresh, or fill detection)
+    const all = (await tapi('/v2/orders?status=all&limit=500&nested=true')) || [];
+    openOrders   = all.filter(o =>  pend.has(o.status));
+    closedOrders = all.filter(o => !pend.has(o.status));
+    detectNewFills(all);
+  } else {
+    // Lightweight: open orders only (used during market-hours polling)
+    openOrders = (await tapi('/v2/orders?status=open&limit=100&nested=true')) || [];
+    // Still scan open orders in case any just filled
+    detectNewFills(openOrders);
+  }
   renderOpenOrders(); renderHistory();
 }
 
+// ── MARKET HOURS DETECTION ──
+function isMarketOpen() {
+  const now = new Date();
+  const et  = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const day = et.getDay(); // 0=Sun, 6=Sat
+  if (day === 0 || day === 6) return false;
+  const h = et.getHours(), m = et.getMinutes();
+  const mins = h * 60 + m;
+  return mins >= 570 && mins < 960; // 9:30am–4:00pm ET
+}
+
+function getRefreshInterval() {
+  return isMarketOpen() ? 15000 : 5 * 60 * 1000; // 15s open, 5min closed
+}
+
+let refreshTimer = null;
+function scheduleNextRefresh() {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(async () => {
+    await refresh();
+    scheduleNextRefresh();
+  }, getRefreshInterval());
+}
+
+let fullRefreshCount = 0;
 async function refresh() {
   try {
     document.getElementById('status-dot').className = 'status-dot';
-    await Promise.all([loadAccount(), loadPositions(), loadOrders()]);
+    // Full closed-order fetch every 10th refresh or when market is closed
+    const doFull = (fullRefreshCount % 10 === 0) || !isMarketOpen();
+    fullRefreshCount++;
+    await Promise.all([loadAccount(), loadPositions(), loadOrders(doFull)]);
     document.getElementById('status-dot').className = 'status-dot live';
-    document.getElementById('v-ts').textContent = new Date().toLocaleTimeString();
+    const mktLabel = isMarketOpen() ? '' : ' · mkt closed';
+    document.getElementById('v-ts').textContent = new Date().toLocaleTimeString() + mktLabel;
     autoSnap();
   } catch(e) { console.error('Refresh error:', e); }
 }
@@ -973,19 +1025,34 @@ function renderHistory() {
   if (!closedOrders.length) { body.innerHTML = ''; empty.style.display = 'flex'; return; }
   empty.style.display = 'none';
   body.innerHTML = closedOrders.map(o => {
-    const fq = parseFloat(o.filled_qty||0), fp = parseFloat(o.filled_avg_price||0);
-    const notl = fq && fp ? fq*fp : null;
+    const fq   = parseFloat(o.filled_qty || 0);
+    const fp   = parseFloat(o.filled_avg_price || 0);
+    const notl = fq && fp ? fq * fp : null;
+    // Determine end timestamp — filled, canceled, or expired
+    const endTs = o.filled_at || o.canceled_at || o.expired_at || o.replaced_at || null;
+    const endLbl = o.filled_at ? fdt(o.filled_at)
+                 : o.canceled_at ? fdt(o.canceled_at)
+                 : o.expired_at  ? fdt(o.expired_at)
+                 : '—';
+    const shortId = o.id ? o.id.slice(0, 8) + '…' : '—';
+
     return `<tr>
       <td class="sym">${o.symbol}</td>
-      <td class="${o.side==='buy'?'pos':'neg'}">${o.side.toUpperCase()}</td>
+      <td class="${o.side === 'buy' ? 'pos' : 'neg'}">${o.side.toUpperCase()}</td>
       <td class="dim">${o.type}</td>
       <td>${o.qty}</td>
-      <td>${fq||'—'}</td>
-      <td>${fp?$$(fp):'—'}</td>
-      <td>${notl?$$(md(notl)):'—'}</td>
+      <td>${fq || '—'}</td>
+      <td class="dim">${o.limit_price ? $$(o.limit_price) : '—'}</td>
+      <td class="dim">${o.stop_price  ? $$(o.stop_price)  : '—'}</td>
+      <td class="${fp ? 'pos' : 'dim'}">${fp ? $$(fp) : '—'}</td>
+      <td class="${notl ? (o.side === 'buy' ? 'pos' : 'neg') : 'dim'}">${notl ? $$(md(notl)) : '—'}</td>
+      <td class="dim">${(o.time_in_force || '').toUpperCase()}</td>
       <td class="st-${o.status}">${o.status}</td>
-      <td class="dim">${fdt(o.submitted_at)}</td>
-      <td class="dim">${o.filled_at?fdt(o.filled_at):'—'}</td>
+      <td class="dim" style="font-size:10px">${fdt(o.created_at)}</td>
+      <td class="dim" style="font-size:10px">${fdt(o.submitted_at)}</td>
+      <td class="${o.filled_at ? 'pos' : 'dim'}" style="font-size:10px">${o.filled_at ? fdt(o.filled_at) : '—'}</td>
+      <td class="${(o.canceled_at || o.expired_at) ? 'neg' : 'dim'}" style="font-size:10px">${endLbl !== fdt(o.filled_at) ? endLbl : '—'}</td>
+      <td class="dim" style="font-size:10px" title="${o.id || ''}">${shortId}</td>
     </tr>`;
   }).join('');
 }
@@ -1369,16 +1436,24 @@ function detectNewFills(allOrders) {
       id:              'pp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
       alpaca_order_id: o.id,
       date:            (o.filled_at || o.submitted_at || '').split('T')[0],
-      timestamp:       o.filled_at || o.submitted_at || new Date().toISOString(),
+      created_at:      o.created_at   || null,
+      submitted_at:    o.submitted_at || null,
+      filled_at:       o.filled_at    || null,
+      canceled_at:     o.canceled_at  || null,
+      expired_at:      o.expired_at   || null,
       symbol:          o.symbol,
       side:            o.side,
       order_type:      o.type,
+      tif:             o.time_in_force || '',
+      limit_price:     o.limit_price  ? parseFloat(o.limit_price)  : null,
+      stop_price:      o.stop_price   ? parseFloat(o.stop_price)   : null,
+      trail_percent:   o.trail_percent ? parseFloat(o.trail_percent) : null,
+      qty_ordered:     parseFloat(o.qty || 0),
       qty_real:        filledQtyReal,
       qty_display:     filledQtyReal * MULTIPLIER,
       fill_price:      fillPx,
       notional_real:   filledQtyReal * fillPx,
       notional_display: filledQtyReal * MULTIPLIER * fillPx,
-      tif:             o.time_in_force || '',
       status:          o.status,
       source:          'alpaca_fill'
     };
@@ -1442,23 +1517,27 @@ function renderLedger() {
   document.getElementById('ls-syms').textContent   = syms;
 
   body.innerHTML = tradeLedger.map((t, i) => {
-    const dt = new Date(t.timestamp);
-    const dateStr = dt.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
-    const timeStr = dt.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+    const dateStr = t.date || '—';
     const shortId = t.alpaca_order_id ? t.alpaca_order_id.slice(0, 8) + '…' : '—';
+    const endTs   = t.canceled_at || t.expired_at;
 
     return `<tr>
       <td class="dim">${tradeLedger.length - i}</td>
       <td>${dateStr}</td>
-      <td class="dim">${timeStr}</td>
       <td class="sym">${t.symbol}</td>
       <td class="${t.side === 'buy' ? 'pos' : 'neg'}">${t.side.toUpperCase()}</td>
       <td class="dim">${t.order_type}</td>
-      <td>${t.qty_display.toLocaleString()}</td>
-      <td>${$$(t.fill_price)}</td>
+      <td class="dim">${(t.tif || '').toUpperCase()}</td>
+      <td>${(t.qty_display || 0).toLocaleString()}</td>
+      <td class="dim">${t.limit_price ? $$(t.limit_price) : '—'}</td>
+      <td class="dim">${t.stop_price  ? $$(t.stop_price)  : '—'}</td>
+      <td class="${t.side === 'buy' ? 'pos' : 'neg'}">${$$(t.fill_price)}</td>
       <td class="${t.side === 'buy' ? 'pos' : 'neg'}">${$$(t.notional_display)}</td>
-      <td class="dim" title="${t.alpaca_order_id || ''}">${shortId}</td>
-      <td class="dim">${t.source}</td>
+      <td class="dim" style="font-size:10px">${fdt(t.created_at)}</td>
+      <td class="dim" style="font-size:10px">${fdt(t.submitted_at)}</td>
+      <td class="pos" style="font-size:10px">${t.filled_at ? fdt(t.filled_at) : '—'}</td>
+      <td class="${endTs ? 'neg' : 'dim'}" style="font-size:10px">${endTs ? fdt(endTs) : '—'}</td>
+      <td class="dim" style="font-size:10px" title="${t.alpaca_order_id || ''}">${shortId}</td>
     </tr>`;
   }).join('');
 }
@@ -1466,21 +1545,24 @@ function renderLedger() {
 function exportLedgerExcel() {
   const wb  = XLSX.utils.book_new();
   const dt  = new Date().toISOString().split('T')[0];
-  const hdr = ['#','Date','Time','Symbol','Side','Order Type','Qty (Display)','Qty (Real)','Fill Price','Notional (Display)','Notional (Real)','TIF','Status','Alpaca Order ID','Source'];
-  const rows = tradeLedger.map((t, i) => {
-    const d = new Date(t.timestamp);
-    return [
-      tradeLedger.length - i,
-      t.date,
-      d.toLocaleTimeString(),
-      t.symbol, t.side, t.order_type,
-      t.qty_display, t.qty_real,
-      t.fill_price,
-      parseFloat(t.notional_display.toFixed(2)),
-      parseFloat(t.notional_real.toFixed(2)),
-      t.tif, t.status, t.alpaca_order_id || '', t.source
-    ];
-  });
+  const hdr = ['#','Date','Symbol','Side','Order Type','TIF',
+    'Qty (Display)','Qty (Real)','Qty Ordered',
+    'Limit Price','Stop Price','Trail %',
+    'Fill Price','Notional (Display)','Notional (Real)',
+    'Created At','Submitted At','Filled At','Canceled/Expired At',
+    'Status','Alpaca Order ID'];
+  const rows = tradeLedger.map((t, i) => [
+    tradeLedger.length - i, t.date,
+    t.symbol, t.side, t.order_type, t.tif || '',
+    t.qty_display, t.qty_real, t.qty_ordered || '',
+    t.limit_price || '', t.stop_price || '', t.trail_percent || '',
+    t.fill_price,
+    parseFloat((t.notional_display || 0).toFixed(2)),
+    parseFloat((t.notional_real    || 0).toFixed(2)),
+    t.created_at   || '', t.submitted_at || '',
+    t.filled_at    || '', t.canceled_at || t.expired_at || '',
+    t.status, t.alpaca_order_id || ''
+  ]);
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([hdr,...rows]), 'Trade Ledger');
   XLSX.writeFile(wb, `paperport-ledger-${dt}.xlsx`);
 }
@@ -1488,8 +1570,25 @@ function exportLedgerExcel() {
 // ══════════════════════════════════════
 // PERFORMANCE CHART
 // ══════════════════════════════════════
-const periodTF = { '1D':'15Min', '1W':'1H', '1M':'1D', '3M':'1D', '6M':'1D', '1A':'1D' };
+const periodTF = { '1D':'15Min', '1W':'1H', '1M':'1D', '3M':'1D', '6M':'1D', 'YTD':'1D', '1A':'1D' };
 const dataTF   = { '15Min':'15Min', '1H':'1Hour', '1D':'1Day' };
+
+// Benchmark cache: { 'SPY_1M_2025-01-01': { pcts: [...], ts: epoch } }
+const benchCache = {};
+const BENCH_TTL  = 60 * 60 * 1000; // 1 hour — re-fetch if older
+
+function ytdStartDate() {
+  return new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0];
+}
+
+// Build Alpaca portfolio/history URL — YTD needs special handling
+function historyUrl(period, tf) {
+  if (period === 'YTD') {
+    const start = ytdStartDate();
+    return `/v2/account/portfolio/history?start=${start}&timeframe=${tf}&extended_hours=false`;
+  }
+  return `/v2/account/portfolio/history?period=${period}&timeframe=${tf}&extended_hours=false`;
+}
 
 async function loadChart(period) {
   lastPeriod = period;
@@ -1499,77 +1598,118 @@ async function loadChart(period) {
   msgEl.style.display = 'none'; wrapEl.style.display = 'block'; statsEl.innerHTML = '';
   const tf = periodTF[period] || '1D';
   try {
-    const hist = await tapi(`/v2/account/portfolio/history?period=${period}&timeframe=${tf}&extended_hours=false`);
-    if (!hist?.timestamp?.length) { wrapEl.style.display='none'; msgEl.textContent='No portfolio history yet.'; msgEl.style.display='block'; return; }
-    const pts = hist.timestamp.map((t,i)=>({t,e:hist.equity[i],pl:hist.profit_loss_pct[i]})).filter(p=>p.e!=null&&p.pl!=null);
-    if (pts.length < 2) { wrapEl.style.display='none'; msgEl.textContent='Not enough data points yet.'; msgEl.style.display='block'; return; }
+    const hist = await tapi(historyUrl(period, tf));
+    if (!hist?.timestamp?.length) {
+      wrapEl.style.display='none'; msgEl.textContent='No portfolio history yet.'; msgEl.style.display='block'; return;
+    }
+    const pts = hist.timestamp
+      .map((t,i) => ({ t, e: hist.equity[i], pl: hist.profit_loss_pct[i] }))
+      .filter(p => p.e != null && p.pl != null);
+    if (pts.length < 2) {
+      wrapEl.style.display='none'; msgEl.textContent='Not enough data points yet.'; msgEl.style.display='block'; return;
+    }
     const labels = pts.map(p => {
-      const d = new Date(p.t*1000);
-      return tf==='1D' ? d.toLocaleDateString('en-US',{month:'short',day:'numeric'})
-                       : d.toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+      const d = new Date(p.t * 1000);
+      return tf === '1D'
+        ? d.toLocaleDateString('en-US', { month:'short', day:'numeric' })
+        : d.toLocaleString('en-US', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
     });
     const equityVals = pts.map(p => p.e);
-    const plPcts     = pts.map(p => parseFloat((p.pl*100).toFixed(3)));
-    let spyPcts = null;
-    if (document.getElementById('spy-chk').checked) {
-      const startDate = new Date(pts[0].t*1000).toISOString().split('T')[0];
-      spyPcts = await fetchBenchmark('SPY', startDate, tf, pts.length);
-    }
-    drawChart(labels, equityVals, plPcts, spyPcts);
-    const lastPL  = plPcts[plPcts.length-1];
-    const spyStat = spyPcts ? `<div class="cs"><div class="cs-lbl">SPY Return</div><div class="cs-val ${cls(spyPcts[spyPcts.length-1])}">${pp2(spyPcts[spyPcts.length-1])}</div></div>` : '';
-    const alpha   = spyPcts != null ? parseFloat((lastPL - spyPcts[spyPcts.length-1]).toFixed(2)) : null;
-    const alpStat = alpha != null ? `<div class="cs"><div class="cs-lbl">Alpha</div><div class="cs-val ${cls(alpha)}">${pp2(alpha)}</div></div>` : '';
+    const plPcts     = pts.map(p => parseFloat((p.pl * 100).toFixed(3)));
+    const startDate  = new Date(pts[0].t * 1000).toISOString().split('T')[0];
+
+    // Fetch both benchmarks in parallel, using cache
+    const [spyPcts, qqqPcts] = await Promise.all([
+      document.getElementById('spy-chk').checked ? fetchBenchmarkCached('SPY', startDate, tf, pts.length) : Promise.resolve(null),
+      document.getElementById('qqq-chk').checked ? fetchBenchmarkCached('QQQ', startDate, tf, pts.length) : Promise.resolve(null)
+    ]);
+
+    drawChart(labels, equityVals, plPcts, spyPcts, qqqPcts);
+
+    const lastPL = plPcts[plPcts.length - 1];
+    const spyLast = spyPcts?.[spyPcts.length - 1];
+    const qqqLast = qqqPcts?.[qqqPcts.length - 1];
+    const spyAlpha = spyLast != null ? parseFloat((lastPL - spyLast).toFixed(2)) : null;
+    const qqqAlpha = qqqLast != null ? parseFloat((lastPL - qqqLast).toFixed(2)) : null;
+
     statsEl.innerHTML = `
       <div class="cs"><div class="cs-lbl">Period Return</div><div class="cs-val ${cls(lastPL)}">${pp2(lastPL)}</div></div>
       <div class="cs"><div class="cs-lbl">Start Value</div><div class="cs-val">${$$(md(equityVals[0]))}</div></div>
       <div class="cs"><div class="cs-lbl">Current Value</div><div class="cs-val">${$$(md(equityVals[equityVals.length-1]))}</div></div>
-      ${spyStat}${alpStat}`;
-  } catch(e) { wrapEl.style.display='none'; msgEl.style.color='var(--red)'; msgEl.textContent='Chart error: '+e.message; msgEl.style.display='block'; }
+      ${spyLast != null ? `<div class="cs"><div class="cs-lbl">SPY Return</div><div class="cs-val ${cls(spyLast)}">${pp2(spyLast)}</div></div>` : ''}
+      ${qqqLast != null ? `<div class="cs"><div class="cs-lbl">QQQ Return</div><div class="cs-val ${cls(qqqLast)}">${pp2(qqqLast)}</div></div>` : ''}
+      ${spyAlpha != null ? `<div class="cs"><div class="cs-lbl">Alpha vs SPY</div><div class="cs-val ${cls(spyAlpha)}">${pp2(spyAlpha)}</div></div>` : ''}
+      ${qqqAlpha != null ? `<div class="cs"><div class="cs-lbl">Alpha vs QQQ</div><div class="cs-val ${cls(qqqAlpha)}">${pp2(qqqAlpha)}</div></div>` : ''}
+    `;
+  } catch(e) {
+    wrapEl.style.display='none'; msgEl.style.color='var(--red)';
+    msgEl.textContent='Chart error: ' + e.message; msgEl.style.display='block';
+  }
 }
 
-async function fetchBenchmark(sym, startDate, tf, maxPts) {
+async function fetchBenchmarkCached(sym, startDate, tf, maxPts) {
+  const key = `${sym}_${tf}_${startDate}`;
+  const now  = Date.now();
+  const cached = benchCache[key];
+  // Use cache if fresh and has enough points
+  if (cached && (now - cached.ts) < BENCH_TTL && cached.pcts.length >= Math.min(maxPts, cached.pcts.length)) {
+    return cached.pcts;
+  }
   try {
     const atf  = dataTF[tf] || '1Day';
     const data  = await dapi(`/v2/stocks/${sym}/bars?timeframe=${atf}&start=${startDate}&limit=${maxPts}&feed=iex&adjustment=split`);
     const bars  = data?.bars;
     if (!bars || bars.length < 2) return null;
     const base  = bars[0].c;
-    return bars.map(b => parseFloat(((b.c-base)/base*100).toFixed(3)));
+    const pcts  = bars.map(b => parseFloat(((b.c - base) / base * 100).toFixed(3)));
+    benchCache[key] = { pcts, ts: now };
+    return pcts;
   } catch { return null; }
 }
 
 function reloadChart() { loadChart(lastPeriod); }
 
-function drawChart(labels, equity, plPcts, spyPcts) {
+function drawChart(labels, equity, plPcts, spyPcts, qqqPcts) {
   const ctx = document.getElementById('perf-chart').getContext('2d');
   if (perfChart) { perfChart.destroy(); perfChart = null; }
+
   const datasets = [{
-    label:'My Portfolio', data:plPcts, borderColor:'rgb(77,159,255)',
-    backgroundColor:'rgba(77,159,255,0.07)', fill:true, tension:0.2,
-    pointRadius:0, borderWidth:2, pointHoverRadius:5
+    label: 'Portfolio', data: plPcts,
+    borderColor: 'rgb(77,159,255)', backgroundColor: 'rgba(77,159,255,0.07)',
+    fill: true, tension: 0.2, pointRadius: 0, borderWidth: 2, pointHoverRadius: 5
   }];
-  if (spyPcts?.length) {
-    const al = [...spyPcts];
-    while (al.length < labels.length) al.push(al[al.length-1]??0);
-    datasets.push({ label:'SPY', data:al.slice(0,labels.length), borderColor:'rgb(240,165,0)',
-      backgroundColor:'transparent', fill:false, tension:0.2, pointRadius:0,
-      borderWidth:1.5, borderDash:[5,3], pointHoverRadius:5 });
-  }
+
+  const addBench = (pcts, label, color) => {
+    if (!pcts?.length) return;
+    const al = [...pcts];
+    while (al.length < labels.length) al.push(al[al.length-1] ?? 0);
+    datasets.push({
+      label, data: al.slice(0, labels.length),
+      borderColor: color, backgroundColor: 'transparent',
+      fill: false, tension: 0.2, pointRadius: 0,
+      borderWidth: 1.5, borderDash: [5, 3], pointHoverRadius: 5
+    });
+  };
+
+  addBench(spyPcts, 'SPY', 'rgb(240,165,0)');
+  addBench(qqqPcts, 'QQQ', 'rgb(180,100,255)');
+
   perfChart = new Chart(ctx, {
-    type:'line', data:{labels, datasets},
-    options:{
-      responsive:true, maintainAspectRatio:false,
-      interaction:{mode:'index',intersect:false},
-      plugins:{
-        legend:{labels:{color:'#5a7494',font:{family:"'IBM Plex Mono',monospace",size:10},boxWidth:10,padding:16}},
-        tooltip:{backgroundColor:'#131b28',borderColor:'#1e2d42',borderWidth:1,
-          titleColor:'#5a7494',bodyColor:'#d4e2f0',padding:10,
-          callbacks:{label:ctx=>{const v=parseFloat(ctx.raw);return ` ${ctx.dataset.label}: ${v>=0?'+':''}${v.toFixed(2)}%`;}}}
+    type: 'line', data: { labels, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color:'#5a7494', font:{ family:"'IBM Plex Mono',monospace", size:10 }, boxWidth:10, padding:16 } },
+        tooltip: {
+          backgroundColor:'#131b28', borderColor:'#1e2d42', borderWidth:1,
+          titleColor:'#5a7494', bodyColor:'#d4e2f0', padding:10,
+          callbacks: { label: ctx => { const v=parseFloat(ctx.raw); return ` ${ctx.dataset.label}: ${v>=0?'+':''}${v.toFixed(2)}%`; } }
+        }
       },
-      scales:{
-        x:{grid:{color:'rgba(30,45,66,.6)'},ticks:{color:'#3a5270',font:{family:"'IBM Plex Mono',monospace",size:9},maxTicksLimit:10,maxRotation:0}},
-        y:{grid:{color:'rgba(30,45,66,.6)'},ticks:{color:'#3a5270',font:{family:"'IBM Plex Mono',monospace",size:9},callback:v=>`${v>=0?'+':''}${parseFloat(v).toFixed(1)}%`}}
+      scales: {
+        x: { grid:{color:'rgba(30,45,66,.6)'}, ticks:{color:'#3a5270', font:{family:"'IBM Plex Mono',monospace", size:9}, maxTicksLimit:10, maxRotation:0} },
+        y: { grid:{color:'rgba(30,45,66,.6)'}, ticks:{color:'#3a5270', font:{family:"'IBM Plex Mono',monospace", size:9}, callback: v=>`${v>=0?'+':''}${parseFloat(v).toFixed(1)}%`} }
       }
     }
   });
@@ -1916,7 +2056,7 @@ async function startApp() {
   loadLedger();
   await pullDataFromGitHub();
   await refresh();
-  setInterval(refresh, 15000);
+  scheduleNextRefresh(); // smart: 15s when market open, 5min when closed
 }
 
 (function boot() {
