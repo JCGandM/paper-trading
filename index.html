@@ -1909,7 +1909,7 @@ async function submitBatch() {
 }
 
 // ══════════════════════════════════════
-// STARTUP
+// STARTUP — bulletproof IIFE boot
 // ══════════════════════════════════════
 async function startApp() {
   renderPortDropdown();
@@ -1920,12 +1920,57 @@ async function startApp() {
   setInterval(refresh, 15000);
 }
 
-loadKeys(); // loads portfolios, GH token, sets activePortId + KEY/SECRET
-if (activePortId && KEY && SECRET) {
-  document.getElementById('setup-overlay').style.display = 'none';
-  document.getElementById('app').classList.add('ready');
-  startApp();
-}
+(function boot() {
+  // Read everything fresh directly from localStorage — no variable chain to fail
+  let ports = {};
+  try { ports = JSON.parse(localStorage.getItem('pp_portfolios') || '{}'); } catch { ports = {}; }
+
+  let activeId = localStorage.getItem('pp_active_portfolio') || null;
+  const ghToken = localStorage.getItem('pp_gh_token') || '';
+  const ghRepo  = localStorage.getItem('pp_gh_repo')  || 'JCGandM/paper-trading';
+
+  // Auto-migrate legacy single-portfolio keys (pp_key / pp_sec → portfolio system)
+  if (Object.keys(ports).length === 0) {
+    const k = localStorage.getItem('pp_key');
+    const s = localStorage.getItem('pp_sec');
+    if (k && s) {
+      activeId = 'port_' + Date.now().toString(36);
+      ports[activeId] = { name: 'Main Portfolio', key: k, secret: s, multiplier: 50, startingEquity: 50000000 };
+      localStorage.setItem('pp_portfolios', JSON.stringify(ports));
+      localStorage.setItem('pp_active_portfolio', activeId);
+      // Migrate existing daily log
+      const dl = localStorage.getItem('pp_daily_log');
+      if (dl) localStorage.setItem(`pp_${activeId}_daily_log`, dl);
+      const tl = localStorage.getItem('pp_trade_ledger');
+      if (tl) localStorage.setItem(`pp_${activeId}_trade_ledger`, tl);
+    }
+  }
+
+  const cfg = activeId ? ports[activeId] : null;
+
+  if (cfg && cfg.key && cfg.secret) {
+    // Set all global state directly
+    portfolios    = ports;
+    activePortId  = activeId;
+    KEY           = cfg.key;
+    SECRET        = cfg.secret;
+    MULTIPLIER    = cfg.multiplier || 50;
+    STARTING_EQUITY = cfg.startingEquity || (1000000 * MULTIPLIER);
+    GH_TOKEN      = ghToken;
+    GH_REPO       = ghRepo;
+
+    // Boot the app
+    document.getElementById('setup-overlay').style.display = 'none';
+    document.getElementById('app').classList.add('ready');
+    startApp();
+  } else {
+    // No credentials found — show setup, pre-fill GitHub fields if available
+    document.getElementById('inp-gh-token').value = ghToken;
+    document.getElementById('inp-gh-repo').value  = ghRepo || 'JCGandM/paper-trading';
+  }
+})();
+
 </script>
 </body>
 </html>
+
