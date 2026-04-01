@@ -207,20 +207,20 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
       <input id="inp-secret" class="setup-input" type="password" placeholder="••••••••••••••••••••••" autocomplete="off">
     </div>
 
-    <div class="setup-section">Firebase Backup <span style="color:var(--dim);font-size:9px;font-weight:400;text-transform:none;letter-spacing:0">(optional — for cross-device sync)</span></div>
-    <div class="fb-optional">Leave blank to use local storage only. Get a free Firebase project at <a href="https://console.firebase.google.com" target="_blank" style="color:var(--blue);text-decoration:none">console.firebase.google.com</a> → Realtime Database.</div>
+    <div class="setup-section">GitHub Backup <span style="color:var(--dim);font-size:9px;font-weight:400;text-transform:none;letter-spacing:0">(optional — syncs trade ledger &amp; daily log to your repo)</span></div>
+    <div class="fb-optional">Leave blank to store locally only. To enable: go to <a href="https://github.com/settings/tokens/new" target="_blank" style="color:var(--blue);text-decoration:none">github.com/settings/tokens/new</a> → check <strong style="color:var(--text)">repo</strong> scope → generate → paste below.</div>
     <div class="setup-field">
-      <label class="setup-label">Firebase Database URL</label>
-      <input id="inp-fb" class="setup-input" type="text" placeholder="https://your-project.firebaseio.com" autocomplete="off">
+      <label class="setup-label">GitHub Personal Access Token</label>
+      <input id="inp-gh-token" class="setup-input" type="password" placeholder="ghp_••••••••••••••••••••••••••••••••••••••" autocomplete="off">
     </div>
     <div class="setup-field">
-      <label class="setup-label">Firebase Auth Token (optional)</label>
-      <input id="inp-fb-token" class="setup-input" type="password" placeholder="Leave blank if DB rules allow public read/write" autocomplete="off">
+      <label class="setup-label">GitHub Repo (owner/repo)</label>
+      <input id="inp-gh-repo" class="setup-input" type="text" placeholder="JCGandM/paper-trading" autocomplete="off" spellcheck="false">
     </div>
 
     <div id="setup-error"></div>
     <button class="btn-connect" id="connect-btn" onclick="saveKeys()">Connect to Alpaca Paper →</button>
-    <div class="setup-note">Keys stored locally in your browser. Never sent anywhere except Alpaca & Firebase.</div>
+    <div class="setup-note">Keys stored locally in your browser only. Never transmitted except to Alpaca &amp; GitHub.</div>
   </div>
 </div>
 
@@ -344,6 +344,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
         <button class="tab-btn" onclick="showTab('hist')">History</button>
         <button class="tab-btn" onclick="showTab('chart')">Performance</button>
         <button class="tab-btn" onclick="showTab('log')">Daily Log</button>
+        <button class="tab-btn" onclick="showTab('ledger')" style="color:var(--green)">🔒 Trade Ledger</button>
         <button class="tab-btn" onclick="showTab('batch')" style="color:var(--amber)">⚡ Batch Orders</button>
       </div>
 
@@ -440,6 +441,60 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
         </div>
       </div>
 
+      <!-- TRADE LEDGER -->
+      <div id="tab-ledger" class="tab-panel">
+        <div style="padding:14px 18px;display:flex;flex-direction:column;gap:12px;overflow-y:auto;flex:1">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-size:9px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--green)">🔒 Independent Trade Ledger</span>
+            <span style="font-size:10px;color:var(--dim)">localStorage + GitHub repo — survives Alpaca outages &amp; device switches</span>
+            <span style="font-size:10px;color:var(--muted);margin-left:auto" id="ledger-count"></span>
+            <button class="h-btn" onclick="syncLedgerFromAlpaca()">↻ Sync from Alpaca</button>
+            <button class="h-btn" onclick="exportLedgerExcel()">⬇ Export Ledger</button>
+            <button class="h-btn" onclick="clearLedger()">✕ Clear</button>
+          </div>
+          <!-- Ledger summary cards -->
+          <div id="ledger-summary" style="display:none;display:flex;gap:16px;flex-wrap:wrap">
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:2px;padding:10px 14px">
+              <div style="font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:3px">Total Fills</div>
+              <div style="font-size:16px;font-weight:700" id="ls-fills">0</div>
+            </div>
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:2px;padding:10px 14px">
+              <div style="font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:3px">Total Bought (Display)</div>
+              <div style="font-size:16px;font-weight:700;color:var(--green)" id="ls-bought">—</div>
+            </div>
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:2px;padding:10px 14px">
+              <div style="font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:3px">Total Sold (Display)</div>
+              <div style="font-size:16px;font-weight:700;color:var(--red)" id="ls-sold">—</div>
+            </div>
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:2px;padding:10px 14px">
+              <div style="font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:3px">Unique Symbols</div>
+              <div style="font-size:16px;font-weight:700" id="ls-syms">—</div>
+            </div>
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:2px;padding:10px 14px">
+              <div style="font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:3px">Last Sync</div>
+              <div style="font-size:12px;font-weight:600;color:var(--muted)" id="ls-sync">—</div>
+            </div>
+          </div>
+          <table class="dt">
+            <thead><tr>
+              <th>#</th><th>Date</th><th>Time</th><th>Symbol</th>
+              <th>Side</th><th>Type</th>
+              <th>Qty (Display)</th><th>Fill Price</th>
+              <th>Notional (Display)</th>
+              <th>Alpaca Order ID</th><th>Source</th>
+            </tr></thead>
+            <tbody id="ledger-body">
+              <tr class="loading-row"><td colspan="11">Loading ledger…</td></tr>
+            </tbody>
+          </table>
+          <div id="ledger-empty" class="empty-state" style="display:none">
+            <div class="empty-icon">🔒</div>
+            <div>No trades recorded yet</div>
+            <div class="dim">Trades are logged automatically when orders fill. Hit "Sync from Alpaca" to import existing history.</div>
+          </div>
+        </div>
+      </div>
+
       <!-- BATCH ORDERS -->
       <div id="tab-batch" class="tab-panel">
         <div style="padding:14px 18px;display:flex;flex-direction:column;gap:14px;overflow-y:auto;flex:1">
@@ -510,13 +565,16 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 const TAPI = 'https://paper-api.alpaca.markets';
 const DAPI = 'https://data.alpaca.markets';
 
-let KEY = '', SECRET = '', FB_URL = '', FB_TOKEN = '';
+let KEY = '', SECRET = '', GH_TOKEN = '', GH_REPO = '';
+let ghDataSha = null;  // SHA of paperport-data.json in the repo — needed for updates
 let side = 'buy';
 let positions = [], openOrders = [], closedOrders = [], account = {};
 let perfChart = null, lastPeriod = '1M';
 let lastAskPrice = null;
 let quoteDebounce = null;
 let dailyLog = [];
+let tradeLedger = [];        // Our independent trade record — never deleted by Alpaca
+let knownFilledIds = new Set(); // Alpaca order IDs already in our ledger
 const MULTIPLIER     = 50;          // Visual scale factor: display = real × 50
 const STARTING_EQUITY = 1000000 * MULTIPLIER; // $50M displayed ($1M real)
 
@@ -529,32 +587,32 @@ function toReal(n) { return parseFloat(n || 0) / MULTIPLIER; }
 // KEYS & SETUP
 // ══════════════════════════════════════
 function loadKeys() {
-  KEY      = localStorage.getItem('pp_key')      || '';
-  SECRET   = localStorage.getItem('pp_sec')      || '';
-  FB_URL   = localStorage.getItem('pp_fb_url')   || '';
-  FB_TOKEN = localStorage.getItem('pp_fb_token') || '';
+  KEY       = localStorage.getItem('pp_key')      || '';
+  SECRET    = localStorage.getItem('pp_sec')      || '';
+  GH_TOKEN  = localStorage.getItem('pp_gh_token') || '';
+  GH_REPO   = localStorage.getItem('pp_gh_repo')  || 'JCGandM/paper-trading';
 }
 
 function saveKeys() {
-  const k  = document.getElementById('inp-key').value.trim();
-  const s  = document.getElementById('inp-secret').value.trim();
-  const fb = document.getElementById('inp-fb').value.trim();
-  const ft = document.getElementById('inp-fb-token').value.trim();
+  const k    = document.getElementById('inp-key').value.trim();
+  const s    = document.getElementById('inp-secret').value.trim();
+  const ght  = document.getElementById('inp-gh-token').value.trim();
+  const ghr  = document.getElementById('inp-gh-repo').value.trim() || 'JCGandM/paper-trading';
   const errEl = document.getElementById('setup-error');
   const btn   = document.getElementById('connect-btn');
 
   errEl.style.display = 'none';
   if (!k || !s) { errEl.textContent = 'API Key and Secret are required.'; errEl.style.display = 'block'; return; }
 
-  KEY = k; SECRET = s; FB_URL = fb; FB_TOKEN = ft;
+  KEY = k; SECRET = s; GH_TOKEN = ght; GH_REPO = ghr;
   btn.disabled = true; btn.textContent = 'Connecting…';
 
   tapi('/v2/account').then(acct => {
     account = acct;
-    localStorage.setItem('pp_key',      k);
-    localStorage.setItem('pp_sec',      s);
-    localStorage.setItem('pp_fb_url',   fb);
-    localStorage.setItem('pp_fb_token', ft);
+    localStorage.setItem('pp_key',       k);
+    localStorage.setItem('pp_sec',       s);
+    localStorage.setItem('pp_gh_token',  ght);
+    localStorage.setItem('pp_gh_repo',   ghr);
     document.getElementById('setup-overlay').style.display = 'none';
     document.getElementById('app').classList.add('ready');
     startApp();
@@ -566,10 +624,10 @@ function saveKeys() {
 }
 
 function showSetup() {
-  document.getElementById('inp-key').value      = KEY;
-  document.getElementById('inp-secret').value   = SECRET;
-  document.getElementById('inp-fb').value       = FB_URL;
-  document.getElementById('inp-fb-token').value = FB_TOKEN;
+  document.getElementById('inp-key').value       = KEY;
+  document.getElementById('inp-secret').value    = SECRET;
+  document.getElementById('inp-gh-token').value  = GH_TOKEN;
+  document.getElementById('inp-gh-repo').value   = GH_REPO;
   document.getElementById('setup-error').style.display = 'none';
   document.getElementById('setup-overlay').style.display = 'flex';
 }
@@ -614,6 +672,7 @@ async function loadOrders() {
   const pend = new Set(['new','partially_filled','accepted','pending_new','accepted_for_bidding','held']);
   openOrders   = all.filter(o =>  pend.has(o.status));
   closedOrders = all.filter(o => !pend.has(o.status));
+  detectNewFills(all);   // ← auto-capture any new fills into our ledger
   renderOpenOrders(); renderHistory();
 }
 
@@ -918,8 +977,9 @@ function showTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => {
     if ((b.getAttribute('onclick')||'').includes(`'${name}'`)) b.classList.add('on');
   });
-  if (name === 'chart') loadChart(lastPeriod);
-  if (name === 'log')   renderDailyLog();
+  if (name === 'chart')  loadChart(lastPeriod);
+  if (name === 'log')    renderDailyLog();
+  if (name === 'ledger') renderLedger();
   if (name === 'batch') {
     if (!batchRows.length) { addBatchRow(); addBatchRow(); addBatchRow(); }
     else renderBatchRows();
@@ -936,28 +996,11 @@ function loadDailyLog() {
 
 function saveDailyLog() {
   localStorage.setItem('pp_daily_log', JSON.stringify(dailyLog));
-  if (FB_URL) pushLogToFirebase();
+  pushDataToGitHub(); // fire and forget
 }
 
-async function pushLogToFirebase() {
-  try {
-    const url = FB_URL.replace(/\/$/, '') + '/paperport/daily_log.json' + (FB_TOKEN ? `?auth=${FB_TOKEN}` : '');
-    await fetch(url, { method:'PUT', body: JSON.stringify(dailyLog), headers:{'Content-Type':'application/json'} });
-  } catch(e) { console.warn('Firebase sync failed:', e.message); }
-}
-
-async function pullLogFromFirebase() {
-  if (!FB_URL) return;
-  try {
-    const url = FB_URL.replace(/\/$/, '') + '/paperport/daily_log.json' + (FB_TOKEN ? `?auth=${FB_TOKEN}` : '');
-    const r = await fetch(url);
-    const data = await r.json();
-    if (data && Array.isArray(data) && data.length > dailyLog.length) {
-      dailyLog = data;
-      saveDailyLog();
-    }
-  } catch(e) { console.warn('Firebase pull failed:', e.message); }
-}
+async function pushLogToGitHub() { await pushDataToGitHub(); }
+async function pullLogFromGitHub() { await pullDataFromGitHub(); }
 
 function autoSnap() {
   const td = today();
@@ -1037,6 +1080,221 @@ function clearDailyLog() {
   dailyLog = [];
   saveDailyLog();
   renderDailyLog();
+}
+
+// ══════════════════════════════════════
+// GITHUB STORAGE ENGINE
+// All data lives in paperport-data.json in your repo.
+// One file, one source of truth, full version history.
+// ══════════════════════════════════════
+const GH_DATA_PATH = 'paperport-data.json';
+
+async function ghRequest(method, path, body) {
+  if (!GH_TOKEN || !GH_REPO) return null;
+  try {
+    const r = await fetch(`https://api.github.com/repos/${GH_REPO}/contents/${path}`, {
+      method,
+      headers: {
+        'Authorization': `token ${GH_TOKEN}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json'
+      },
+      body: body ? JSON.stringify(body) : undefined
+    });
+    if (!r.ok) { console.warn('GitHub API error:', r.status, await r.text()); return null; }
+    return await r.json();
+  } catch(e) { console.warn('GitHub request failed:', e.message); return null; }
+}
+
+async function pushDataToGitHub() {
+  if (!GH_TOKEN || !GH_REPO) return;
+  const payload = {
+    trade_ledger: tradeLedger,
+    daily_log:    dailyLog,
+    last_updated: new Date().toISOString(),
+    multiplier:   MULTIPLIER,
+    starting_equity: STARTING_EQUITY
+  };
+  const content = btoa(unescape(encodeURIComponent(JSON.stringify(payload, null, 2))));
+  const body = {
+    message: `PaperPort auto-sync ${new Date().toISOString().split('T')[0]}`,
+    content,
+    ...(ghDataSha ? { sha: ghDataSha } : {})
+  };
+  const result = await ghRequest('PUT', GH_DATA_PATH, body);
+  if (result?.content?.sha) ghDataSha = result.content.sha;
+}
+
+async function pullDataFromGitHub() {
+  if (!GH_TOKEN || !GH_REPO) return;
+  const result = await ghRequest('GET', GH_DATA_PATH);
+  if (!result?.content) return;
+  try {
+    ghDataSha = result.sha;
+    const decoded = JSON.parse(decodeURIComponent(escape(atob(result.content.replace(/\n/g, '')))));
+
+    // Merge: take whichever has more entries (GitHub wins ties on ledger, local wins on log)
+    if (decoded.trade_ledger && decoded.trade_ledger.length > tradeLedger.length) {
+      tradeLedger    = decoded.trade_ledger;
+      knownFilledIds = new Set(tradeLedger.map(t => t.alpaca_order_id).filter(Boolean));
+      localStorage.setItem('pp_trade_ledger', JSON.stringify(tradeLedger));
+    }
+    if (decoded.daily_log && decoded.daily_log.length > dailyLog.length) {
+      dailyLog = decoded.daily_log;
+      localStorage.setItem('pp_daily_log', JSON.stringify(dailyLog));
+    }
+  } catch(e) { console.warn('GitHub data parse failed:', e.message); }
+}
+
+function pushLedgerToGitHub() { pushDataToGitHub(); }
+function pullLedgerFromGitHub() { return pullDataFromGitHub(); }
+
+// ══════════════════════════════════════
+// TRADE LEDGER — Independent of Alpaca
+// ══════════════════════════════════════
+function loadLedger() {
+  try {
+    tradeLedger  = JSON.parse(localStorage.getItem('pp_trade_ledger') || '[]');
+    knownFilledIds = new Set(tradeLedger.map(t => t.alpaca_order_id).filter(Boolean));
+  } catch { tradeLedger = []; knownFilledIds = new Set(); }
+}
+
+function saveLedger() {
+  localStorage.setItem('pp_trade_ledger', JSON.stringify(tradeLedger));
+  pushDataToGitHub(); // fire and forget
+}
+
+async function pushLedgerToFirebase() { /* replaced by GitHub */ }
+async function pullLedgerFromFirebase() { return pullDataFromGitHub(); }
+
+// Called on every refresh — scans newly closed orders for fills we haven't recorded
+function detectNewFills(allOrders) {
+  const fillStatuses = new Set(['filled', 'partially_filled']);
+  let newFills = 0;
+
+  allOrders.filter(o => fillStatuses.has(o.status) && !knownFilledIds.has(o.id)).forEach(o => {
+    const filledQtyReal = parseFloat(o.filled_qty || 0);
+    const fillPx        = parseFloat(o.filled_avg_price || 0);
+    if (!filledQtyReal || !fillPx) return;
+
+    const entry = {
+      id:              'pp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+      alpaca_order_id: o.id,
+      date:            (o.filled_at || o.submitted_at || '').split('T')[0],
+      timestamp:       o.filled_at || o.submitted_at || new Date().toISOString(),
+      symbol:          o.symbol,
+      side:            o.side,
+      order_type:      o.type,
+      qty_real:        filledQtyReal,
+      qty_display:     filledQtyReal * MULTIPLIER,
+      fill_price:      fillPx,
+      notional_real:   filledQtyReal * fillPx,
+      notional_display: filledQtyReal * MULTIPLIER * fillPx,
+      tif:             o.time_in_force || '',
+      status:          o.status,
+      source:          'alpaca_fill'
+    };
+
+    tradeLedger.push(entry);
+    knownFilledIds.add(o.id);
+    newFills++;
+  });
+
+  if (newFills > 0) {
+    // Sort newest first
+    tradeLedger.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    saveLedger();
+    renderLedger();
+  }
+}
+
+// Manual full sync — imports all filled orders from Alpaca history
+async function syncLedgerFromAlpaca() {
+  const btn = document.querySelector('[onclick="syncLedgerFromAlpaca()"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
+  try {
+    const all = (await tapi('/v2/orders?status=closed&limit=500&nested=true')) || [];
+    detectNewFills(all);
+    document.getElementById('ls-sync').textContent = new Date().toLocaleString() + ' (GitHub' + (GH_TOKEN ? ' ✓' : ' — no token') + ')';
+    renderLedger();
+  } catch(e) { alert('Sync failed: ' + e.message); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = '↻ Sync from Alpaca'; } }
+}
+
+function clearLedger() {
+  if (!confirm('Clear the entire trade ledger? This cannot be undone.')) return;
+  tradeLedger = []; knownFilledIds = new Set();
+  saveLedger(); renderLedger();
+}
+
+function renderLedger() {
+  const body   = document.getElementById('ledger-body');
+  const empty  = document.getElementById('ledger-empty');
+  const count  = document.getElementById('ledger-count');
+  const sumEl  = document.getElementById('ledger-summary');
+
+  count.textContent = tradeLedger.length + ' trades';
+
+  if (!tradeLedger.length) {
+    body.innerHTML = ''; empty.style.display = 'flex';
+    sumEl.style.display = 'none'; return;
+  }
+  empty.style.display = 'none';
+  sumEl.style.display = 'flex';
+
+  // Summary stats
+  const fills   = tradeLedger.length;
+  const bought  = tradeLedger.filter(t => t.side === 'buy').reduce((s, t) => s + t.notional_display, 0);
+  const sold    = tradeLedger.filter(t => t.side === 'sell').reduce((s, t) => s + t.notional_display, 0);
+  const syms    = new Set(tradeLedger.map(t => t.symbol)).size;
+
+  document.getElementById('ls-fills').textContent = fills;
+  document.getElementById('ls-bought').textContent = $$(bought);
+  document.getElementById('ls-sold').textContent   = $$(sold);
+  document.getElementById('ls-syms').textContent   = syms;
+
+  body.innerHTML = tradeLedger.map((t, i) => {
+    const dt = new Date(t.timestamp);
+    const dateStr = dt.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'});
+    const timeStr = dt.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+    const shortId = t.alpaca_order_id ? t.alpaca_order_id.slice(0, 8) + '…' : '—';
+
+    return `<tr>
+      <td class="dim">${tradeLedger.length - i}</td>
+      <td>${dateStr}</td>
+      <td class="dim">${timeStr}</td>
+      <td class="sym">${t.symbol}</td>
+      <td class="${t.side === 'buy' ? 'pos' : 'neg'}">${t.side.toUpperCase()}</td>
+      <td class="dim">${t.order_type}</td>
+      <td>${t.qty_display.toLocaleString()}</td>
+      <td>${$$(t.fill_price)}</td>
+      <td class="${t.side === 'buy' ? 'pos' : 'neg'}">${$$(t.notional_display)}</td>
+      <td class="dim" title="${t.alpaca_order_id || ''}">${shortId}</td>
+      <td class="dim">${t.source}</td>
+    </tr>`;
+  }).join('');
+}
+
+function exportLedgerExcel() {
+  const wb  = XLSX.utils.book_new();
+  const dt  = new Date().toISOString().split('T')[0];
+  const hdr = ['#','Date','Time','Symbol','Side','Order Type','Qty (Display)','Qty (Real)','Fill Price','Notional (Display)','Notional (Real)','TIF','Status','Alpaca Order ID','Source'];
+  const rows = tradeLedger.map((t, i) => {
+    const d = new Date(t.timestamp);
+    return [
+      tradeLedger.length - i,
+      t.date,
+      d.toLocaleTimeString(),
+      t.symbol, t.side, t.order_type,
+      t.qty_display, t.qty_real,
+      t.fill_price,
+      parseFloat(t.notional_display.toFixed(2)),
+      parseFloat(t.notional_real.toFixed(2)),
+      t.tif, t.status, t.alpaca_order_id || '', t.source
+    ];
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([hdr,...rows]), 'Trade Ledger');
+  XLSX.writeFile(wb, `paperport-ledger-${dt}.xlsx`);
 }
 
 // ══════════════════════════════════════
@@ -1236,6 +1494,21 @@ function exportExcel() {
     e.positions, e.source, e.timestamp
   ]);
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([dlHdr,...dlRows]), 'Daily Log');
+
+  // ── Sheet 5: Trade Ledger ──
+  const llHdr = ['#','Date','Time','Symbol','Side','Order Type','Qty (Display)','Qty (Real)','Fill Price','Notional (Display)','Notional (Real)','TIF','Status','Alpaca Order ID'];
+  const llRows = tradeLedger.map((t, i) => {
+    const d = new Date(t.timestamp);
+    return [
+      tradeLedger.length - i, t.date, d.toLocaleTimeString(),
+      t.symbol, t.side, t.order_type,
+      t.qty_display, t.qty_real, t.fill_price,
+      parseFloat(t.notional_display.toFixed(2)),
+      parseFloat(t.notional_real.toFixed(2)),
+      t.tif, t.status, t.alpaca_order_id || ''
+    ];
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([llHdr,...llRows]), 'Trade Ledger');
 
   XLSX.writeFile(wb, `paperport-${dt}.xlsx`);
 }
@@ -1451,7 +1724,8 @@ async function submitBatch() {
 // ══════════════════════════════════════
 async function startApp() {
   loadDailyLog();
-  await pullLogFromFirebase();
+  loadLedger();
+  await pullDataFromGitHub(); // single call pulls both ledger + daily log
   await refresh();
   setInterval(refresh, 15000);
 }
