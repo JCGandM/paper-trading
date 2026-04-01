@@ -624,7 +624,6 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 const TAPI = 'https://paper-api.alpaca.markets';
 const DAPI = 'https://data.alpaca.markets';
 
-let KEY = '', SECRET = '', GH_TOKEN = '', GH_REPO = '';
 let ghDataSha = null;  // SHA of paperport-data.json in the repo — needed for updates
 let side = 'buy';
 let positions = [], openOrders = [], closedOrders = [], account = {};
@@ -1973,4 +1972,3 @@ async function startApp() {
 </script>
 </body>
 </html>
-
