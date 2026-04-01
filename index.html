@@ -180,7 +180,43 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 .dl-controls { display:flex; align-items:center; gap:8px; }
 .dl-badge { font-size:10px; color:var(--dim); margin-left:auto; }
 
-/* ── SCROLLBARS ── */
+/* ── PORTFOLIO SWITCHER ── */
+#portfolio-switcher {
+  position: relative; flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  height: 100%; display: flex; align-items: center;
+}
+#port-btn {
+  height: 100%; padding: 0 14px;
+  background: none; border: none; cursor: pointer;
+  font-family: var(--mono); font-size: 11px; font-weight: 700;
+  color: var(--text); display: flex; align-items: center; gap: 8px;
+  white-space: nowrap;
+}
+#port-btn:hover { background: rgba(77,159,255,.06); }
+#port-btn .port-name { max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+#port-btn .port-arrow { color: var(--dim); font-size: 9px; }
+#port-dropdown {
+  display: none; position: absolute; top: 100%; left: 0;
+  min-width: 220px; background: var(--card);
+  border: 1px solid var(--border2); border-top: none;
+  z-index: 100; box-shadow: 0 8px 24px rgba(0,0,0,.4);
+}
+#port-dropdown.open { display: block; }
+.pd-item {
+  padding: 9px 14px; cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11px;
+}
+.pd-item:hover { background: rgba(77,159,255,.06); }
+.pd-item.active { color: var(--blue); }
+.pd-active-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+.pd-inactive-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--dim); flex-shrink: 0; }
+.pd-new { color: var(--amber); font-weight: 700; padding: 9px 14px; cursor: pointer; font-size: 11px; }
+.pd-new:hover { background: rgba(240,165,0,.06); }
+.pd-delete { margin-left: auto; color: var(--dim); font-size: 10px; cursor: pointer; padding: 2px 4px; }
+.pd-delete:hover { color: var(--red); }
 ::-webkit-scrollbar { width:5px; height:5px; }
 ::-webkit-scrollbar-track { background:transparent; }
 ::-webkit-scrollbar-thumb { background:var(--border2); border-radius:2px; }
@@ -194,8 +230,14 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 <div id="setup-overlay">
   <div id="setup-panel">
     <div class="setup-logo"><span>◈</span> PaperPort</div>
-    <h2>Connect your account</h2>
+    <h2 id="setup-title">Connect your account</h2>
     <p>Sign up free at <a href="https://alpaca.markets" target="_blank">alpaca.markets</a> and grab your Paper Trading API keys.</p>
+
+    <div class="setup-section">Portfolio</div>
+    <div class="setup-field">
+      <label class="setup-label">Portfolio Name</label>
+      <input id="inp-port-name" class="setup-input" type="text" placeholder="e.g. Main Fund, Tech Portfolio…" autocomplete="off">
+    </div>
 
     <div class="setup-section">Alpaca Paper Trading API</div>
     <div class="setup-field">
@@ -205,6 +247,10 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
     <div class="setup-field">
       <label class="setup-label">Secret Key</label>
       <input id="inp-secret" class="setup-input" type="password" placeholder="••••••••••••••••••••••" autocomplete="off">
+    </div>
+    <div class="setup-field">
+      <label class="setup-label">Display Multiplier <span style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">(e.g. 50 = show $50M for $1M account)</span></label>
+      <input id="inp-multiplier" class="setup-input" type="number" min="1" max="1000" value="50" placeholder="50">
     </div>
 
     <div class="setup-section">GitHub Backup <span style="color:var(--dim);font-size:9px;font-weight:400;text-transform:none;letter-spacing:0">(optional — syncs trade ledger &amp; daily log to your repo)</span></div>
@@ -228,7 +274,20 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 <div id="app">
 
   <div id="header">
-    <div class="h-logo">PaperPort <span style="font-size:9px;background:var(--amber);color:var(--bg);border-radius:2px;padding:1px 5px;font-weight:700;letter-spacing:.04em">50×</span></div>
+    <div class="h-logo">PaperPort</div>
+
+    <!-- Portfolio Switcher -->
+    <div id="portfolio-switcher">
+      <button id="port-btn" onclick="togglePortDropdown()">
+        <span class="port-name" id="port-btn-name">—</span>
+        <span style="font-size:9px;background:var(--amber);color:var(--bg);border-radius:2px;padding:1px 5px;font-weight:700" id="port-btn-mult">50×</span>
+        <span class="port-arrow">▾</span>
+      </button>
+      <div id="port-dropdown">
+        <div id="port-dropdown-list"></div>
+        <div class="pd-new" onclick="newPortfolio()">＋ Add Portfolio</div>
+      </div>
+    </div>
     <div id="acct-bar">
       <div class="acct-stat"><div class="as-label">Portfolio Value</div><div class="as-val" id="v-pv">—</div></div>
       <div class="acct-stat"><div class="as-label">Cash</div><div class="as-val" id="v-cash">—</div></div>
@@ -573,48 +632,166 @@ let perfChart = null, lastPeriod = '1M';
 let lastAskPrice = null;
 let quoteDebounce = null;
 let dailyLog = [];
-let tradeLedger = [];        // Our independent trade record — never deleted by Alpaca
-let knownFilledIds = new Set(); // Alpaca order IDs already in our ledger
-const MULTIPLIER     = 50;          // Visual scale factor: display = real × 50
-const STARTING_EQUITY = 1000000 * MULTIPLIER; // $50M displayed ($1M real)
+let tradeLedger = [];
+let knownFilledIds = new Set();
 
-// Scale a real Alpaca dollar value up for display
+// ── PORTFOLIO STATE ──
+// All portfolios stored in: localStorage['pp_portfolios'] = { id: {name, key, secret, multiplier, startingEquity} }
+// Current portfolio ID: localStorage['pp_active_portfolio']
+// Per-portfolio data: localStorage['pp_{id}_daily_log'], localStorage['pp_{id}_trade_ledger']
+
+let portfolios = {};       // { id: { name, key, secret, multiplier, startingEquity } }
+let activePortId = null;   // currently active portfolio ID
+
+// Convenience getters for current portfolio config
+function portCfg() { return portfolios[activePortId] || {}; }
+let KEY      = '';
+let SECRET   = '';
+let GH_TOKEN = '';
+let GH_REPO  = '';
+let MULTIPLIER     = 50;
+let STARTING_EQUITY = 50000000;
+
 function md(n) { return parseFloat(n || 0) * MULTIPLIER; }
-// Scale a display dollar amount back to real for API
 function toReal(n) { return parseFloat(n || 0) / MULTIPLIER; }
 
-// ══════════════════════════════════════
-// KEYS & SETUP
-// ══════════════════════════════════════
-function loadKeys() {
-  KEY       = localStorage.getItem('pp_key')      || '';
-  SECRET    = localStorage.getItem('pp_sec')      || '';
-  GH_TOKEN  = localStorage.getItem('pp_gh_token') || '';
-  GH_REPO   = localStorage.getItem('pp_gh_repo')  || 'JCGandM/paper-trading';
+// ── PORTFOLIO MANAGEMENT ──
+function genPortId() { return 'port_' + Date.now().toString(36); }
+
+function loadPortfolios() {
+  try { portfolios = JSON.parse(localStorage.getItem('pp_portfolios') || '{}'); } catch { portfolios = {}; }
+  GH_TOKEN = localStorage.getItem('pp_gh_token') || '';
+  GH_REPO  = localStorage.getItem('pp_gh_repo')  || 'JCGandM/paper-trading';
+  activePortId = localStorage.getItem('pp_active_portfolio') || null;
+  // Legacy migration: if old single-portfolio keys exist, import them
+  if (Object.keys(portfolios).length === 0) {
+    const k = localStorage.getItem('pp_key');
+    const s = localStorage.getItem('pp_sec');
+    if (k && s) {
+      const id = genPortId();
+      portfolios[id] = { name: 'Main Portfolio', key: k, secret: s, multiplier: 50, startingEquity: 50000000 };
+      activePortId = id;
+      savePortfolioList();
+    }
+  }
+  if (activePortId && portfolios[activePortId]) applyPortfolio(activePortId);
 }
 
+function applyPortfolio(id) {
+  activePortId = id;
+  const cfg = portfolios[id];
+  KEY            = cfg.key;
+  SECRET         = cfg.secret;
+  MULTIPLIER     = cfg.multiplier || 50;
+  STARTING_EQUITY = cfg.startingEquity || (1000000 * MULTIPLIER);
+  localStorage.setItem('pp_active_portfolio', id);
+}
+
+function savePortfolioList() {
+  localStorage.setItem('pp_portfolios', JSON.stringify(portfolios));
+  localStorage.setItem('pp_gh_token', GH_TOKEN);
+  localStorage.setItem('pp_gh_repo',  GH_REPO);
+}
+
+function renderPortDropdown() {
+  const list  = document.getElementById('port-dropdown-list');
+  const btn   = document.getElementById('port-btn-name');
+  const mult  = document.getElementById('port-btn-mult');
+  if (!list) return;
+  const cfg = portCfg();
+  btn.textContent  = cfg.name || '—';
+  mult.textContent = (cfg.multiplier || 50) + '×';
+  list.innerHTML = Object.entries(portfolios).map(([id, p]) => `
+    <div class="pd-item ${id === activePortId ? 'active' : ''}" onclick="switchPortfolio('${id}')">
+      <span class="${id === activePortId ? 'pd-active-dot' : 'pd-inactive-dot'}"></span>
+      <span style="flex:1">${p.name}</span>
+      <span style="color:var(--dim);font-size:9px">${p.multiplier || 50}×</span>
+      ${Object.keys(portfolios).length > 1 ? `<span class="pd-delete" onclick="event.stopPropagation();deletePortfolio('${id}')">✕</span>` : ''}
+    </div>
+  `).join('');
+}
+
+function togglePortDropdown() {
+  document.getElementById('port-dropdown').classList.toggle('open');
+}
+
+// Close dropdown when clicking outside
+document.addEventListener('click', e => {
+  if (!document.getElementById('portfolio-switcher')?.contains(e.target))
+    document.getElementById('port-dropdown')?.classList.remove('open');
+});
+
+async function switchPortfolio(id) {
+  if (id === activePortId) { togglePortDropdown(); return; }
+  document.getElementById('port-dropdown').classList.remove('open');
+  applyPortfolio(id);
+  loadDailyLog();
+  loadLedger();
+  await pullDataFromGitHub();
+  await refresh();
+  renderPortDropdown();
+}
+
+function deletePortfolio(id) {
+  if (Object.keys(portfolios).length <= 1) { alert('You need at least one portfolio.'); return; }
+  if (!confirm(`Delete "${portfolios[id]?.name}"? All local data for this portfolio will be removed.`)) return;
+  // Clear local data
+  localStorage.removeItem(`pp_${id}_daily_log`);
+  localStorage.removeItem(`pp_${id}_trade_ledger`);
+  delete portfolios[id];
+  savePortfolioList();
+  // Switch to first remaining portfolio
+  const remaining = Object.keys(portfolios)[0];
+  switchPortfolio(remaining);
+  renderPortDropdown();
+}
+
+function newPortfolio() {
+  document.getElementById('port-dropdown').classList.remove('open');
+  // Pre-fill setup with empty fields for new portfolio
+  document.getElementById('inp-port-name').value  = '';
+  document.getElementById('inp-key').value         = '';
+  document.getElementById('inp-secret').value      = '';
+  document.getElementById('inp-gh-token').value    = GH_TOKEN;
+  document.getElementById('inp-gh-repo').value     = GH_REPO;
+  document.getElementById('inp-multiplier').value  = '50';
+  document.getElementById('setup-title').textContent = 'Add Portfolio';
+  document.getElementById('setup-error').style.display = 'none';
+  document.getElementById('setup-overlay').style.display = 'flex';
+}
+
+// ── KEYS & SETUP (now portfolio-aware) ──
+function loadKeys() { loadPortfolios(); }  // unified entry point
+
 function saveKeys() {
+  const name = document.getElementById('inp-port-name').value.trim() || 'My Portfolio';
   const k    = document.getElementById('inp-key').value.trim();
   const s    = document.getElementById('inp-secret').value.trim();
   const ght  = document.getElementById('inp-gh-token').value.trim();
   const ghr  = document.getElementById('inp-gh-repo').value.trim() || 'JCGandM/paper-trading';
+  const mult = parseInt(document.getElementById('inp-multiplier').value) || 50;
   const errEl = document.getElementById('setup-error');
   const btn   = document.getElementById('connect-btn');
 
   errEl.style.display = 'none';
   if (!k || !s) { errEl.textContent = 'API Key and Secret are required.'; errEl.style.display = 'block'; return; }
 
-  KEY = k; SECRET = s; GH_TOKEN = ght; GH_REPO = ghr;
+  KEY = k; SECRET = s; GH_TOKEN = ght; GH_REPO = ghr; MULTIPLIER = mult;
+  STARTING_EQUITY = 1000000 * mult;
   btn.disabled = true; btn.textContent = 'Connecting…';
 
   tapi('/v2/account').then(acct => {
     account = acct;
-    localStorage.setItem('pp_key',       k);
-    localStorage.setItem('pp_sec',       s);
-    localStorage.setItem('pp_gh_token',  ght);
-    localStorage.setItem('pp_gh_repo',   ghr);
+    // Create or update portfolio entry
+    const id = activePortId && document.getElementById('setup-title').textContent === 'Settings' ? activePortId : genPortId();
+    portfolios[id] = { name, key: k, secret: s, multiplier: mult, startingEquity: 1000000 * mult };
+    activePortId = id;
+    GH_TOKEN = ght; GH_REPO = ghr;
+    savePortfolioList();
+    applyPortfolio(id);
     document.getElementById('setup-overlay').style.display = 'none';
     document.getElementById('app').classList.add('ready');
+    renderPortDropdown();
     startApp();
   }).catch(e => {
     errEl.textContent = 'Connection failed: ' + e.message;
@@ -624,10 +801,14 @@ function saveKeys() {
 }
 
 function showSetup() {
-  document.getElementById('inp-key').value       = KEY;
-  document.getElementById('inp-secret').value    = SECRET;
-  document.getElementById('inp-gh-token').value  = GH_TOKEN;
-  document.getElementById('inp-gh-repo').value   = GH_REPO;
+  const cfg = portCfg();
+  document.getElementById('inp-port-name').value  = cfg.name  || '';
+  document.getElementById('inp-key').value         = cfg.key   || '';
+  document.getElementById('inp-secret').value      = cfg.secret || '';
+  document.getElementById('inp-gh-token').value    = GH_TOKEN;
+  document.getElementById('inp-gh-repo').value     = GH_REPO;
+  document.getElementById('inp-multiplier').value  = cfg.multiplier || 50;
+  document.getElementById('setup-title').textContent = 'Settings';
   document.getElementById('setup-error').style.display = 'none';
   document.getElementById('setup-overlay').style.display = 'flex';
 }
@@ -990,13 +1171,13 @@ function showTab(name) {
 // DAILY LOG
 // ══════════════════════════════════════
 function loadDailyLog() {
-  try { dailyLog = JSON.parse(localStorage.getItem('pp_daily_log') || '[]'); }
+  try { dailyLog = JSON.parse(localStorage.getItem(`pp_${activePortId}_daily_log`) || '[]'); }
   catch { dailyLog = []; }
 }
 
 function saveDailyLog() {
-  localStorage.setItem('pp_daily_log', JSON.stringify(dailyLog));
-  pushDataToGitHub(); // fire and forget
+  localStorage.setItem(`pp_${activePortId}_daily_log`, JSON.stringify(dailyLog));
+  pushDataToGitHub();
 }
 
 async function pushLogToGitHub() { await pushDataToGitHub(); }
@@ -1107,17 +1288,25 @@ async function ghRequest(method, path, body) {
 }
 
 async function pushDataToGitHub() {
-  if (!GH_TOKEN || !GH_REPO) return;
-  const payload = {
-    trade_ledger: tradeLedger,
-    daily_log:    dailyLog,
-    last_updated: new Date().toISOString(),
-    multiplier:   MULTIPLIER,
+  if (!GH_TOKEN || !GH_REPO || !activePortId) return;
+  // Read current file first to preserve other portfolios' data
+  let existing = {};
+  const cur = await ghRequest('GET', GH_DATA_PATH);
+  if (cur?.content) {
+    try { existing = JSON.parse(decodeURIComponent(escape(atob(cur.content.replace(/\n/g,'')))) ); ghDataSha = cur.sha; } catch {}
+  }
+  if (!existing.portfolios) existing.portfolios = {};
+  existing.portfolios[activePortId] = {
+    name:            portCfg().name,
+    trade_ledger:    tradeLedger,
+    daily_log:       dailyLog,
+    last_updated:    new Date().toISOString(),
+    multiplier:      MULTIPLIER,
     starting_equity: STARTING_EQUITY
   };
-  const content = btoa(unescape(encodeURIComponent(JSON.stringify(payload, null, 2))));
+  const content = btoa(unescape(encodeURIComponent(JSON.stringify(existing, null, 2))));
   const body = {
-    message: `PaperPort auto-sync ${new Date().toISOString().split('T')[0]}`,
+    message: `PaperPort sync — ${portCfg().name || activePortId} — ${new Date().toISOString().split('T')[0]}`,
     content,
     ...(ghDataSha ? { sha: ghDataSha } : {})
   };
@@ -1126,22 +1315,22 @@ async function pushDataToGitHub() {
 }
 
 async function pullDataFromGitHub() {
-  if (!GH_TOKEN || !GH_REPO) return;
+  if (!GH_TOKEN || !GH_REPO || !activePortId) return;
   const result = await ghRequest('GET', GH_DATA_PATH);
   if (!result?.content) return;
   try {
     ghDataSha = result.sha;
-    const decoded = JSON.parse(decodeURIComponent(escape(atob(result.content.replace(/\n/g, '')))));
-
-    // Merge: take whichever has more entries (GitHub wins ties on ledger, local wins on log)
-    if (decoded.trade_ledger && decoded.trade_ledger.length > tradeLedger.length) {
-      tradeLedger    = decoded.trade_ledger;
+    const all = JSON.parse(decodeURIComponent(escape(atob(result.content.replace(/\n/g,'')))));
+    const portData = all?.portfolios?.[activePortId];
+    if (!portData) return;
+    if (portData.trade_ledger && portData.trade_ledger.length > tradeLedger.length) {
+      tradeLedger    = portData.trade_ledger;
       knownFilledIds = new Set(tradeLedger.map(t => t.alpaca_order_id).filter(Boolean));
-      localStorage.setItem('pp_trade_ledger', JSON.stringify(tradeLedger));
+      localStorage.setItem(`pp_${activePortId}_trade_ledger`, JSON.stringify(tradeLedger));
     }
-    if (decoded.daily_log && decoded.daily_log.length > dailyLog.length) {
-      dailyLog = decoded.daily_log;
-      localStorage.setItem('pp_daily_log', JSON.stringify(dailyLog));
+    if (portData.daily_log && portData.daily_log.length > dailyLog.length) {
+      dailyLog = portData.daily_log;
+      localStorage.setItem(`pp_${activePortId}_daily_log`, JSON.stringify(dailyLog));
     }
   } catch(e) { console.warn('GitHub data parse failed:', e.message); }
 }
@@ -1154,14 +1343,14 @@ function pullLedgerFromGitHub() { return pullDataFromGitHub(); }
 // ══════════════════════════════════════
 function loadLedger() {
   try {
-    tradeLedger  = JSON.parse(localStorage.getItem('pp_trade_ledger') || '[]');
+    tradeLedger    = JSON.parse(localStorage.getItem(`pp_${activePortId}_trade_ledger`) || '[]');
     knownFilledIds = new Set(tradeLedger.map(t => t.alpaca_order_id).filter(Boolean));
   } catch { tradeLedger = []; knownFilledIds = new Set(); }
 }
 
 function saveLedger() {
-  localStorage.setItem('pp_trade_ledger', JSON.stringify(tradeLedger));
-  pushDataToGitHub(); // fire and forget
+  localStorage.setItem(`pp_${activePortId}_trade_ledger`, JSON.stringify(tradeLedger));
+  pushDataToGitHub();
 }
 
 async function pushLedgerToFirebase() { /* replaced by GitHub */ }
@@ -1723,15 +1912,16 @@ async function submitBatch() {
 // STARTUP
 // ══════════════════════════════════════
 async function startApp() {
+  renderPortDropdown();
   loadDailyLog();
   loadLedger();
-  await pullDataFromGitHub(); // single call pulls both ledger + daily log
+  await pullDataFromGitHub();
   await refresh();
   setInterval(refresh, 15000);
 }
 
-loadKeys();
-if (KEY && SECRET) {
+loadKeys(); // loads portfolios, GH token, sets activePortId + KEY/SECRET
+if (activePortId && KEY && SECRET) {
   document.getElementById('setup-overlay').style.display = 'none';
   document.getElementById('app').classList.add('ready');
   startApp();
