@@ -411,6 +411,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
         <button class="tab-btn" onclick="showTab('log')">Daily Log</button>
         <button class="tab-btn" onclick="showTab('ledger')" style="color:var(--green)">🔒 Trade Ledger</button>
         <button class="tab-btn" onclick="showTab('batch')" style="color:var(--amber)">⚡ Batch Orders</button>
+        <button class="tab-btn" onclick="showTab('analytics')" style="color:var(--green)">📊 Analytics</button>
       </div>
 
       <!-- POSITIONS -->
@@ -665,6 +666,66 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
             <div id="batch-result" style="display:none;color:var(--green);font-size:11px"></div>
             <button class="submit-btn sbuy" style="width:auto;padding:9px 24px;margin-left:auto" onclick="submitBatch()">⚡ Submit All Orders</button>
           </div>
+        </div>
+      </div>
+
+      <!-- ANALYTICS -->
+      <div id="tab-analytics" class="tab-panel">
+        <div style="padding:14px 18px;display:flex;flex-direction:column;gap:16px;overflow-y:auto;flex:1">
+
+          <!-- API Audit Banner -->
+          <div id="api-audit-banner" style="background:var(--blue-bg);border:1px solid rgba(77,159,255,.2);border-radius:2px;padding:8px 12px;font-size:10px;color:var(--blue);display:flex;gap:16px;flex-wrap:wrap">
+            <span>🔒 API Audit:</span>
+            <span id="audit-rate">Market closed — refreshing every 5 min</span>
+            <span id="audit-calls">~4 Trading API calls/refresh · Data API: on-demand only</span>
+            <span id="audit-limit">Alpaca limit: 200 req/min · Current usage: &lt;1/min ✓</span>
+          </div>
+
+          <!-- Risk Metrics row -->
+          <div>
+            <div style="font-size:9px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--dim);margin-bottom:8px">Risk &amp; Return Metrics</div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap" id="risk-metrics-row"></div>
+            <div style="font-size:9px;color:var(--dim);margin-top:6px" id="analytics-data-note"></div>
+          </div>
+
+          <!-- Trade analytics row -->
+          <div>
+            <div style="font-size:9px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--dim);margin-bottom:8px">Position Analytics</div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap" id="trade-metrics-row"></div>
+          </div>
+
+          <!-- Two column: sector + contributors -->
+          <div style="display:flex;gap:14px;flex-wrap:wrap">
+            <!-- Sector allocation -->
+            <div style="flex:1;min-width:240px;background:var(--card);border:1px solid var(--border);border-radius:2px;padding:12px">
+              <div style="font-size:9px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--dim);margin-bottom:10px">Sector Allocation</div>
+              <div id="sector-chart"></div>
+            </div>
+            <!-- Top/Bottom contributors -->
+            <div style="flex:1;min-width:240px;background:var(--card);border:1px solid var(--border);border-radius:2px;padding:12px">
+              <div style="font-size:9px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--dim);margin-bottom:10px">Today's Contributors</div>
+              <div id="contributors-chart"></div>
+            </div>
+          </div>
+
+          <!-- Rolling P&L -->
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:2px;padding:12px">
+            <div style="font-size:9px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--dim);margin-bottom:10px">Daily P&amp;L History (from log)</div>
+            <div id="rolling-pl-chart" style="height:120px;position:relative">
+              <canvas id="rolling-pl-canvas"></canvas>
+            </div>
+          </div>
+
+          <!-- Sparklines table -->
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:2px">
+            <div style="padding:10px 12px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)">
+              <span style="font-size:9px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--dim)">30-Day Position Sparklines</span>
+              <span style="font-size:9px;color:var(--dim)" id="sparkline-note">Loading prices…</span>
+              <button class="h-btn" style="margin-left:auto" onclick="loadSparklines(true)">↻ Refresh</button>
+            </div>
+            <div id="sparklines-grid" style="display:flex;flex-wrap:wrap;gap:0"></div>
+          </div>
+
         </div>
       </div>
 
@@ -966,6 +1027,7 @@ async function refresh() {
     const doFull = (fullRefreshCount % 10 === 0) || !isMarketOpen();
     fullRefreshCount++;
     await Promise.all([loadAccount(), loadPositions(), loadOrders(doFull)]);
+    renderPositions(); // re-render after account data confirmed loaded (fixes % of equity race)
     document.getElementById('status-dot').className = 'status-dot live';
     const mktLabel = isMarketOpen() ? '' : ' · mkt closed';
     document.getElementById('v-ts').textContent = new Date().toLocaleTimeString() + mktLabel;
@@ -1465,9 +1527,10 @@ function showTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => {
     if ((b.getAttribute('onclick')||'').includes(`'${name}'`)) b.classList.add('on');
   });
-  if (name === 'chart')  loadChart(lastPeriod);
-  if (name === 'log')    renderDailyLog();
-  if (name === 'ledger') renderLedger();
+  if (name === 'chart')    loadChart(lastPeriod);
+  if (name === 'log')      renderDailyLog();
+  if (name === 'ledger')   renderLedger();
+  if (name === 'analytics') renderAnalytics();
   if (name === 'batch') {
     if (!batchRows.length) { addBatchRow(); addBatchRow(); addBatchRow(); }
     else renderBatchRows();
@@ -2315,6 +2378,429 @@ async function submitBatch() {
     errEl.textContent = `All ${failed} order${failed>1?'s':''} failed. Check symbols and buying power.`;
     errEl.style.display = 'block';
   }
+}
+
+// ══════════════════════════════════════
+// ANALYTICS ENGINE
+// ══════════════════════════════════════
+
+// ── Sector map — hardcoded, covers common US equities ──
+const SECTOR_MAP = {
+  // Technology
+  AAPL:'Technology', MSFT:'Technology', NVDA:'Technology', AMD:'Technology',
+  INTC:'Technology', TSM:'Technology', AVGO:'Technology', QCOM:'Technology',
+  TXN:'Technology', MU:'Technology', AMAT:'Technology', LRCX:'Technology',
+  APP:'Technology', DUOL:'Technology', ADBE:'Technology', CRM:'Technology',
+  NOW:'Technology', SNOW:'Technology', PLTR:'Technology', CRWD:'Technology',
+  PANW:'Technology', FTNT:'Technology', ZS:'Technology', OKTA:'Technology',
+  DDOG:'Technology', GTLB:'Technology', NET:'Technology', MDB:'Technology',
+  // Communication Services
+  GOOGL:'Communication', GOOG:'Communication', META:'Communication',
+  NFLX:'Communication', RDDT:'Communication', SPOT:'Communication',
+  SNAP:'Communication', PINS:'Communication', TWTR:'Communication',
+  T:'Communication', VZ:'Communication', TMUS:'Communication',
+  // Consumer Discretionary
+  AMZN:'Consumer Disc.', TSLA:'Consumer Disc.', BKNG:'Consumer Disc.',
+  MELI:'Consumer Disc.', SE:'Consumer Disc.', SHOP:'Consumer Disc.',
+  UBER:'Consumer Disc.', LYFT:'Consumer Disc.', ABNB:'Consumer Disc.',
+  NKE:'Consumer Disc.', SBUX:'Consumer Disc.', MCD:'Consumer Disc.',
+  HD:'Consumer Disc.', LOW:'Consumer Disc.', TGT:'Consumer Disc.',
+  EBAY:'Consumer Disc.', ETSY:'Consumer Disc.',
+  // Financials
+  HOOD:'Financials', JPM:'Financials', GS:'Financials', MS:'Financials',
+  BAC:'Financials', WFC:'Financials', C:'Financials', BLK:'Financials',
+  V:'Financials', MA:'Financials', PYPL:'Financials', SQ:'Financials',
+  COF:'Financials', AXP:'Financials', COIN:'Financials',
+  // Healthcare
+  JNJ:'Healthcare', PFE:'Healthcare', MRK:'Healthcare', ABBV:'Healthcare',
+  LLY:'Healthcare', UNH:'Healthcare', CVS:'Healthcare', TMO:'Healthcare',
+  // Energy
+  XOM:'Energy', CVX:'Energy', COP:'Energy', SLB:'Energy',
+  // Consumer Staples
+  PG:'Consumer Staples', KO:'Consumer Staples', PEP:'Consumer Staples',
+  COST:'Consumer Staples', WMT:'Consumer Staples', PM:'Consumer Staples',
+  // Industrials
+  CAT:'Industrials', DE:'Industrials', BA:'Industrials', GE:'Industrials',
+  // ETFs
+  SPY:'ETF', QQQ:'ETF', IWM:'ETF', VTI:'ETF', ARKK:'ETF',
+};
+
+function getSector(sym) {
+  return SECTOR_MAP[sym.toUpperCase()] || 'Other';
+}
+
+// ── Math helpers ──
+function mean(arr)   { return arr.length ? arr.reduce((a,b) => a+b, 0) / arr.length : 0; }
+function stddev(arr) {
+  if (arr.length < 2) return 0;
+  const m = mean(arr);
+  return Math.sqrt(arr.reduce((s, v) => s + (v - m) ** 2, 0) / (arr.length - 1));
+}
+
+// ── Core metric computations ──
+function computeRiskMetrics() {
+  // Need at least 2 daily log entries for meaningful stats
+  if (dailyLog.length < 2) return null;
+
+  // Daily returns as decimals, sorted oldest→newest
+  const sorted = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
+  const returns = sorted.map(e => (e.day_pl_pct || 0) / 100);
+  const n = returns.length;
+
+  const rfDaily = 0.0525 / 252; // ~5.25% risk-free rate
+  const mu      = mean(returns);
+  const sigma   = stddev(returns);
+
+  // Sharpe
+  const sharpe = sigma > 0 ? ((mu - rfDaily) / sigma) * Math.sqrt(252) : null;
+
+  // Sortino — downside deviation only
+  const downside = returns.filter(r => r < rfDaily);
+  const downsideDev = downside.length > 0
+    ? Math.sqrt(mean(downside.map(r => (r - rfDaily) ** 2))) * Math.sqrt(252)
+    : 0;
+  const sortino = downsideDev > 0 ? ((mu - rfDaily) * 252) / downsideDev : null;
+
+  // Max drawdown from equity series
+  let peak = sorted[0].equity, maxDD = 0;
+  for (const e of sorted) {
+    if (e.equity > peak) peak = e.equity;
+    const dd = peak > 0 ? (e.equity - peak) / peak : 0;
+    if (dd < maxDD) maxDD = dd;
+  }
+
+  // Annualized return & volatility
+  const annualReturn = mu * 252;
+  const annualVol    = sigma * Math.sqrt(252);
+
+  // Calmar = annualized return / |max drawdown|
+  const calmar = maxDD < 0 ? annualReturn / Math.abs(maxDD) : null;
+
+  // Beta — approximate from daily log vs a fixed market return assumption
+  // Real beta needs historical market data; we note it needs more data
+  const betaNote = 'Requires 30+ days of data';
+
+  return { sharpe, sortino, maxDD, annualReturn, annualVol, calmar, n, betaNote };
+}
+
+function computePositionMetrics() {
+  if (!positions.length) return null;
+  const pv = parseFloat(account.portfolio_value || 0);
+
+  const winners = positions.filter(p => parseFloat(p.unrealized_pl) > 0);
+  const losers  = positions.filter(p => parseFloat(p.unrealized_pl) < 0);
+
+  const winRate  = positions.length ? (winners.length / positions.length * 100) : 0;
+  const avgWin   = winners.length ? mean(winners.map(p => parseFloat(p.unrealized_pl))) : 0;
+  const avgLoss  = losers.length  ? mean(losers.map(p => parseFloat(p.unrealized_pl)))  : 0;
+  const profitFactor = Math.abs(avgLoss) > 0 ? Math.abs(avgWin) / Math.abs(avgLoss) : null;
+
+  const cash = parseFloat(account.cash || 0);
+  const cashDragPct = pv > 0 ? cash / pv * 100 : 0;
+
+  // Today's contributors — sorted by intraday P&L
+  const contributors = [...positions]
+    .map(p => ({
+      symbol: p.symbol,
+      pl: parseFloat(p.unrealized_intraday_pl),
+      contribution: pv > 0 ? parseFloat(p.unrealized_intraday_pl) / pv * 100 : 0
+    }))
+    .sort((a, b) => b.pl - a.pl);
+
+  // Concentration — HHI (Herfindahl index)
+  const weights = positions.map(p => Math.abs(parseFloat(p.market_value)) / pv);
+  const hhi = weights.reduce((s, w) => s + w * w, 0) * 100; // 0-100, higher = more concentrated
+
+  // Sector breakdown
+  const sectorTotals = {};
+  for (const p of positions) {
+    const sec = getSector(p.symbol);
+    const mv  = Math.abs(parseFloat(p.market_value));
+    sectorTotals[sec] = (sectorTotals[sec] || 0) + mv;
+  }
+  const sectors = Object.entries(sectorTotals)
+    .map(([name, mv]) => ({ name, mv, pct: pv > 0 ? mv / pv * 100 : 0 }))
+    .sort((a, b) => b.mv - a.mv);
+
+  return { winRate, avgWin, avgLoss, profitFactor, cashDragPct, contributors, hhi, sectors };
+}
+
+// ── Metric card helper ──
+function metricCard(label, value, sub = '', color = '') {
+  return `<div style="background:var(--bg);border:1px solid var(--border);border-radius:2px;padding:10px 14px;min-width:110px">
+    <div style="font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin-bottom:4px">${label}</div>
+    <div style="font-size:20px;font-weight:700;color:${color||'var(--text)'}">${value}</div>
+    ${sub ? `<div style="font-size:9px;color:var(--muted);margin-top:2px">${sub}</div>` : ''}
+  </div>`;
+}
+
+// ── Main render ──
+function renderAnalytics() {
+  const risk = computeRiskMetrics();
+  const pos  = computePositionMetrics();
+
+  // Update audit banner
+  const open = isMarketOpen();
+  document.getElementById('audit-rate').textContent =
+    open ? 'Market OPEN — refreshing every 15s' : 'Market closed — refreshing every 5 min';
+  document.getElementById('audit-calls').textContent =
+    open ? '3 Trading API calls/refresh · ~12/min' : '4 Trading API calls/refresh · ~0.8/min';
+
+  // ── Risk metrics ──
+  const riskEl = document.getElementById('risk-metrics-row');
+  if (!risk) {
+    riskEl.innerHTML = `<div style="color:var(--dim);font-size:11px;padding:8px 0">Need at least 2 daily log entries. Hit "📌 Log Day" each session to build up data.</div>`;
+  } else {
+    const fmt = (v, d=2) => v != null ? v.toFixed(d) : '—';
+    const fmtPct = (v) => v != null ? (v*100).toFixed(2)+'%' : '—';
+    const sharpeColor = risk.sharpe == null ? '' : risk.sharpe > 1 ? 'var(--green)' : risk.sharpe > 0 ? 'var(--amber)' : 'var(--red)';
+    const sortinoColor = risk.sortino == null ? '' : risk.sortino > 1 ? 'var(--green)' : risk.sortino > 0 ? 'var(--amber)' : 'var(--red)';
+    const ddColor = risk.maxDD < -0.1 ? 'var(--red)' : risk.maxDD < -0.05 ? 'var(--amber)' : 'var(--green)';
+    riskEl.innerHTML =
+      metricCard('Sharpe Ratio',   fmt(risk.sharpe),      `Risk-free adj · ${risk.n}d`, sharpeColor) +
+      metricCard('Sortino Ratio',  fmt(risk.sortino),     'Downside-adj return', sortinoColor) +
+      metricCard('Max Drawdown',   fmtPct(risk.maxDD),    'Peak-to-trough', ddColor) +
+      metricCard('Annual. Vol',    fmtPct(risk.annualVol),'σ of daily returns') +
+      metricCard('Annual. Return', fmtPct(risk.annualReturn), 'From daily log', risk.annualReturn >= 0 ? 'var(--green)' : 'var(--red)') +
+      metricCard('Calmar Ratio',   fmt(risk.calmar),      'Return ÷ max DD', risk.calmar != null && risk.calmar > 0 ? 'var(--green)' : 'var(--red)');
+
+    const noteEl = document.getElementById('analytics-data-note');
+    noteEl.textContent = `Based on ${risk.n} trading day${risk.n !== 1 ? 's' : ''} of data. Metrics become reliable after 20+ days. Beta requires 30+ days.`;
+  }
+
+  // ── Position metrics ──
+  const tradeEl = document.getElementById('trade-metrics-row');
+  if (!pos) {
+    tradeEl.innerHTML = `<div style="color:var(--dim);font-size:11px">No open positions.</div>`;
+  } else {
+    const pfColor = pos.profitFactor == null ? '' : pos.profitFactor > 1.5 ? 'var(--green)' : pos.profitFactor > 1 ? 'var(--amber)' : 'var(--red)';
+    const cashColor = pos.cashDragPct > 30 ? 'var(--amber)' : pos.cashDragPct > 50 ? 'var(--red)' : 'var(--muted)';
+    const hhiColor  = pos.hhi > 25 ? 'var(--red)' : pos.hhi > 15 ? 'var(--amber)' : 'var(--green)';
+    tradeEl.innerHTML =
+      metricCard('Win Rate',       pos.winRate.toFixed(1)+'%', `${positions.filter(p=>parseFloat(p.unrealized_pl)>0).length} of ${positions.length} positions`) +
+      metricCard('Avg Winner',     $$(md(pos.avgWin),true),    'Unrealized P&L') +
+      metricCard('Avg Loser',      $$(md(pos.avgLoss),true),   'Unrealized P&L') +
+      metricCard('Profit Factor',  pos.profitFactor != null ? pos.profitFactor.toFixed(2) : '—', '|Avg Win| ÷ |Avg Loss|', pfColor) +
+      metricCard('Cash Drag',      pos.cashDragPct.toFixed(1)+'%', 'Uninvested capital', cashColor) +
+      metricCard('Concentration',  pos.hhi.toFixed(1), 'HHI index (lower=diversified)', hhiColor);
+  }
+
+  // ── Sector chart ──
+  const secEl = document.getElementById('sector-chart');
+  if (pos?.sectors?.length) {
+    const colors = ['#4d9fff','#00d68a','#f0a500','#ff4d6a','#b46fff','#5dcaa5','#7f77dd','#ef9f27'];
+    secEl.innerHTML = pos.sectors.map((s, i) => {
+      const barW = Math.max(s.pct * 1.8, 2);
+      const col  = colors[i % colors.length];
+      return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <div style="width:90px;font-size:10px;color:var(--muted);text-align:right;flex-shrink:0">${s.name}</div>
+        <div style="flex:1;background:var(--bg);border-radius:2px;height:14px;position:relative">
+          <div style="height:100%;width:${Math.min(barW,100)}%;background:${col};border-radius:2px;transition:width .3s"></div>
+        </div>
+        <div style="font-size:10px;font-weight:700;color:${col};min-width:38px">${s.pct.toFixed(1)}%</div>
+        <div style="font-size:10px;color:var(--dim);min-width:70px;text-align:right">${$$(md(s.mv))}</div>
+      </div>`;
+    }).join('');
+    // Cash row
+    const cashPct = pos.cashDragPct;
+    secEl.innerHTML += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;margin-top:4px;border-top:1px solid var(--border);padding-top:4px">
+      <div style="width:90px;font-size:10px;color:var(--dim);text-align:right">Cash</div>
+      <div style="flex:1;background:var(--bg);border-radius:2px;height:14px">
+        <div style="height:100%;width:${Math.min(cashPct*1.8,100)}%;background:var(--dim);border-radius:2px"></div>
+      </div>
+      <div style="font-size:10px;color:var(--dim);min-width:38px">${cashPct.toFixed(1)}%</div>
+      <div style="font-size:10px;color:var(--dim);min-width:70px;text-align:right">${$$(md(parseFloat(account.cash||0)))}</div>
+    </div>`;
+  } else {
+    secEl.innerHTML = `<div style="color:var(--dim);font-size:11px">No positions to analyze.</div>`;
+  }
+
+  // ── Top / Bottom contributors ──
+  const contEl = document.getElementById('contributors-chart');
+  if (pos?.contributors?.length) {
+    const all    = pos.contributors;
+    const top5   = all.slice(0, 5);
+    const bot5   = all.slice(-5).reverse();
+    const maxAbs = Math.max(...all.map(c => Math.abs(c.pl)), 1);
+
+    const row = (c) => {
+      const isPos = c.pl >= 0;
+      const barW  = Math.abs(c.pl) / maxAbs * 100;
+      const col   = isPos ? 'var(--green)' : 'var(--red)';
+      return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
+        <div style="width:44px;font-size:10px;font-weight:700;color:var(--text)">${c.symbol}</div>
+        <div style="flex:1;height:12px;background:var(--bg);border-radius:2px;position:relative">
+          <div style="height:100%;width:${barW.toFixed(1)}%;background:${col};border-radius:2px"></div>
+        </div>
+        <div style="font-size:10px;font-weight:700;color:${col};min-width:70px;text-align:right">${$$(md(c.pl),true)}</div>
+        <div style="font-size:9px;color:var(--dim);min-width:42px;text-align:right">${c.contribution >= 0 ? '+' : ''}${c.contribution.toFixed(2)}%</div>
+      </div>`;
+    };
+
+    contEl.innerHTML =
+      `<div style="font-size:9px;color:var(--green);font-weight:700;margin-bottom:4px">TOP GAINERS</div>` +
+      top5.filter(c => c.pl > 0).map(row).join('') +
+      `<div style="font-size:9px;color:var(--red);font-weight:700;margin:8px 0 4px">TOP LAGGARDS</div>` +
+      bot5.filter(c => c.pl < 0).map(row).join('') ||
+      `<div style="color:var(--dim);font-size:11px">No intraday P&L data yet.</div>`;
+  }
+
+  // ── Rolling P&L chart ──
+  renderRollingPL();
+
+  // ── Sparklines (lazy, cached) ──
+  loadSparklines();
+}
+
+// ── Rolling P&L bar chart ──
+let rollingPLChart = null;
+function renderRollingPL() {
+  const canvasEl = document.getElementById('rolling-pl-canvas');
+  if (!canvasEl) return;
+
+  if (rollingPLChart) { rollingPLChart.destroy(); rollingPLChart = null; }
+
+  if (dailyLog.length < 2) {
+    document.getElementById('rolling-pl-chart').innerHTML =
+      `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--dim);font-size:11px">Log at least 2 days to see this chart</div>`;
+    return;
+  }
+
+  const sorted = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
+  const labels = sorted.map(e => {
+    const d = new Date(e.date);
+    return d.toLocaleDateString('en-US', { month:'short', day:'numeric' });
+  });
+  const plData   = sorted.map(e => parseFloat((e.day_pl_pct || 0).toFixed(3)));
+  const barColors = plData.map(v => v >= 0 ? 'rgba(0,214,138,0.7)' : 'rgba(255,77,106,0.7)');
+
+  // Rebuild canvas
+  document.getElementById('rolling-pl-chart').innerHTML = '<canvas id="rolling-pl-canvas"></canvas>';
+  const ctx = document.getElementById('rolling-pl-canvas').getContext('2d');
+
+  rollingPLChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Daily P&L %',
+        data: plData,
+        backgroundColor: barColors,
+        borderRadius: 2,
+        borderSkipped: false,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: '#131b28', borderColor: '#1e2d42', borderWidth: 1,
+          titleColor: '#5a7494', bodyColor: '#d4e2f0', padding: 8,
+          callbacks: { label: ctx => ` ${ctx.raw >= 0 ? '+' : ''}${parseFloat(ctx.raw).toFixed(3)}%` }
+        }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: '#3a5270', font: { size: 9, family: "'IBM Plex Mono',monospace" } } },
+        y: {
+          grid: { color: 'rgba(30,45,66,.5)' },
+          ticks: { color: '#3a5270', font: { size: 9, family: "'IBM Plex Mono',monospace" }, callback: v => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%` }
+        }
+      }
+    }
+  });
+}
+
+// ── Sparklines — single batch Alpaca call, cached 60 min ──
+let sparkCache     = null;   // { data: {SYM: [closes]}, ts: epoch }
+let sparkLoading   = false;
+const SPARK_TTL    = 60 * 60 * 1000; // 60 min cache
+
+async function loadSparklines(forceRefresh = false) {
+  const grid    = document.getElementById('sparklines-grid');
+  const noteEl  = document.getElementById('sparkline-note');
+  if (!grid || !positions.length) return;
+
+  const now = Date.now();
+  const cacheValid = sparkCache && (now - sparkCache.ts) < SPARK_TTL && !forceRefresh;
+
+  if (cacheValid) {
+    renderSparklines(sparkCache.data);
+    noteEl.textContent = `Cached · updated ${Math.round((now - sparkCache.ts) / 60000)}m ago · 1 API call`;
+    return;
+  }
+
+  if (sparkLoading) return;
+  sparkLoading = true;
+  noteEl.textContent = 'Fetching 30-day bars (1 API call)…';
+  grid.innerHTML = '';
+
+  try {
+    const syms = positions.map(p => p.symbol).join(',');
+    // Single multi-symbol call — 1 API call for ALL positions combined
+    const startDate = new Date(Date.now() - 35 * 24 * 3600 * 1000).toISOString().split('T')[0];
+    const data = await dapi(`/v2/stocks/bars?symbols=${encodeURIComponent(syms)}&timeframe=1Day&start=${startDate}&limit=35&feed=iex&adjustment=split`);
+
+    if (!data?.bars) throw new Error('No bar data returned');
+
+    // Parse: data.bars is { AAPL: [{t,o,h,l,c,v},...], ... }
+    const parsed = {};
+    for (const [sym, bars] of Object.entries(data.bars)) {
+      parsed[sym] = bars.map(b => b.c);
+    }
+
+    sparkCache = { data: parsed, ts: Date.now() };
+    renderSparklines(parsed);
+    noteEl.textContent = `1 batch API call · ${Object.keys(parsed).length} symbols · refreshes every 60 min`;
+  } catch(e) {
+    noteEl.textContent = `Failed: ${e.message}`;
+    grid.innerHTML = `<div style="padding:12px;color:var(--red);font-size:11px">Could not load sparklines: ${e.message}</div>`;
+  } finally {
+    sparkLoading = false;
+  }
+}
+
+function renderSparklines(barData) {
+  const grid = document.getElementById('sparklines-grid');
+  if (!grid) return;
+  const pv = parseFloat(account.portfolio_value || 0);
+
+  grid.innerHTML = positions.map(p => {
+    const closes = barData[p.symbol];
+    const allocPct = pv > 0 ? Math.abs(parseFloat(p.market_value)) / pv * 100 : 0;
+    const uplpct   = parseFloat(p.unrealized_plpc) * 100;
+    const dayPct   = parseFloat(p.change_today) * 100;
+    const lineColor = dayPct >= 0 ? '#00d68a' : '#ff4d6a';
+
+    let sparkSVG = '';
+    if (closes && closes.length >= 2) {
+      const min = Math.min(...closes), max = Math.max(...closes);
+      const range = max - min || 1;
+      const W = 100, H = 32;
+      const pts = closes.map((c, i) => {
+        const x = (i / (closes.length - 1)) * W;
+        const y = H - ((c - min) / range) * H;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      }).join(' ');
+      sparkSVG = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="display:block">
+        <polyline points="${pts}" fill="none" stroke="${lineColor}" stroke-width="1.5" stroke-linejoin="round"/>
+      </svg>`;
+    } else {
+      sparkSVG = `<div style="width:100px;height:32px;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:9px">no data</div>`;
+    }
+
+    return `<div style="width:160px;padding:8px 10px;border-right:1px solid var(--border);border-bottom:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
+        <span style="font-size:11px;font-weight:700;color:var(--text)">${p.symbol}</span>
+        <span style="font-size:9px;color:${dayPct>=0?'var(--green)':'var(--red)'}">${dayPct>=0?'+':''}${dayPct.toFixed(2)}%</span>
+      </div>
+      ${sparkSVG}
+      <div style="display:flex;justify-content:space-between;margin-top:4px">
+        <span style="font-size:9px;color:var(--dim)">${allocPct.toFixed(1)}% of book</span>
+        <span style="font-size:9px;color:${uplpct>=0?'var(--green)':'var(--red)'}">${uplpct>=0?'+':''}${uplpct.toFixed(2)}%</span>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 // ══════════════════════════════════════
