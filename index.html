@@ -252,6 +252,10 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
       <label class="setup-label">Display Multiplier <span style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">(e.g. 50 = show $50M for $1M account)</span></label>
       <input id="inp-multiplier" class="setup-input" type="number" min="1" max="1000" value="50" placeholder="50">
     </div>
+    <div class="setup-field">
+      <label class="setup-label">Max Leverage % <span style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0;font-size:9px">100 = cash only · 110 = 10% margin · 200 = full Alpaca margin</span></label>
+      <input id="inp-max-leverage" class="setup-input" type="number" min="100" max="200" value="100" placeholder="100">
+    </div>
 
     <div class="setup-section">GitHub Backup <span style="color:var(--dim);font-size:9px;font-weight:400;text-transform:none;letter-spacing:0">(optional — syncs trade ledger &amp; daily log to your repo)</span></div>
     <div class="fb-optional">Leave blank to store locally only. To enable: go to <a href="https://github.com/settings/tokens/new" target="_blank" style="color:var(--blue);text-decoration:none">github.com/settings/tokens/new</a> → check <strong style="color:var(--text)">repo</strong> scope → generate → paste below.</div>
@@ -294,6 +298,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
       <div class="acct-stat"><div class="as-label">Buying Power</div><div class="as-val" id="v-bp">—</div></div>
       <div class="acct-stat"><div class="as-label">Day P&amp;L</div><div class="as-val" id="v-dpl">—</div></div>
       <div class="acct-stat"><div class="as-label">Invested</div><div class="as-val" id="v-invested">—</div></div>
+      <div class="acct-stat"><div class="as-label">Leverage</div><div class="as-val" id="v-leverage">—</div></div>
     </div>
     <div id="header-actions">
       <span class="status-dot" id="status-dot"></span>
@@ -363,7 +368,8 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
         </div>
 
         <!-- Capital preview -->
-        <div id="cap-preview">
+        <div id="cap-preview" style="display:none;background:var(--amber-bg);border:1px solid rgba(240,165,0,.2);border-radius:2px;padding:7px 8px;margin-bottom:9px">
+          <div style="font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--amber);margin-bottom:5px">Order Preview</div>
           <div class="cp-row">
             <span class="cp-label">Est. Cost</span>
             <span class="cp-val" id="cp-cost">—</span>
@@ -409,18 +415,50 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 
       <!-- POSITIONS -->
       <div id="tab-pos" class="tab-panel on">
+        <div style="display:flex;align-items:center;padding:6px 12px;background:var(--surface);border-bottom:1px solid var(--border);gap:8px">
+          <span style="font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)">Sort:</span>
+          <button class="h-btn" id="sort-sym-btn"  onclick="sortPositions('sym')">A→Z</button>
+          <button class="h-btn" id="sort-size-btn" onclick="sortPositions('size')">Size</button>
+          <button class="h-btn" id="sort-gain-btn" onclick="sortPositions('gain')">Gain</button>
+          <button class="h-btn" id="sort-day-btn"  onclick="sortPositions('day')">Day P&amp;L</button>
+          <span style="margin-left:auto;font-size:9px;color:var(--dim)" id="pos-sort-label"></span>
+        </div>
         <table class="dt">
           <thead><tr>
             <th>Symbol</th><th>Side</th><th>Qty</th><th>Avg Entry</th>
             <th>Current</th><th>Mkt Value</th><th>% of Equity</th>
             <th>Unr. P&amp;L</th><th>Unr. %</th>
-            <th>Day P&amp;L</th><th>Day %</th><th>Action</th>
+            <th>Day P&amp;L</th><th>Day %</th><th>Actions</th>
           </tr></thead>
           <tbody id="pos-body"><tr class="loading-row"><td colspan="12">Loading positions…</td></tr></tbody>
         </table>
         <div id="pos-empty" class="empty-state" style="display:none">
           <div class="empty-icon">📊</div><div>No open positions</div>
           <div class="dim">Place an order to get started</div>
+        </div>
+        <!-- Add/Trim panel (appears below table) -->
+        <div id="addtrim-panel" style="display:none;border-top:1px solid var(--border);padding:14px 18px;background:var(--surface)">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-size:11px;font-weight:700;color:var(--text)" id="at-title">Add / Trim</span>
+            <div class="side-toggle" style="width:140px">
+              <button id="at-add-btn" class="side-btn buy on" onclick="setATMode('add')">+ ADD</button>
+              <button id="at-trim-btn" class="side-btn sell" onclick="setATMode('trim')">– TRIM</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <label class="ot-lbl" style="margin:0">Shares:</label>
+              <input id="at-shares" class="ot-in" type="number" min="1" step="any" placeholder="0" style="width:90px" oninput="updateATPreview()">
+            </div>
+            <div id="at-preview" style="display:flex;gap:16px;flex-wrap:wrap">
+              <div><div class="ot-lbl">Est. Cost</div><div style="font-size:12px;font-weight:700" id="at-cost">—</div></div>
+              <div><div class="ot-lbl">Capital Change</div><div style="font-size:12px;font-weight:700" id="at-cap-chg">—</div></div>
+              <div><div class="ot-lbl">New Qty</div><div style="font-size:12px;font-weight:700" id="at-new-qty">—</div></div>
+              <div><div class="ot-lbl">New % of Equity</div><div style="font-size:12px;font-weight:700" id="at-new-pct">—</div></div>
+            </div>
+            <div style="margin-left:auto;display:flex;gap:6px">
+              <button id="at-submit-btn" class="submit-btn sbuy" style="padding:6px 16px;width:auto" onclick="submitATOrder()">Submit</button>
+              <button class="h-btn" onclick="closeATPanel()">✕</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -441,18 +479,24 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 
       <!-- HISTORY -->
       <div id="tab-hist" class="tab-panel">
+        <div style="display:flex;align-items:center;padding:6px 12px;background:var(--surface);border-bottom:1px solid var(--border);gap:8px">
+          <span style="font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)">Sort:</span>
+          <button class="h-btn" onclick="sortHistory('date')">Date ↓</button>
+          <button class="h-btn" onclick="sortHistory('sym')">Symbol</button>
+          <button class="h-btn" onclick="sortHistory('notional')">Size</button>
+          <input id="hist-filter" class="ot-in" type="text" placeholder="Filter symbol…" style="width:120px;padding:4px 8px;margin-left:auto" oninput="renderHistory()">
+        </div>
         <table class="dt">
           <thead><tr>
-            <th>Symbol</th><th>Side</th><th>Type</th>
+            <th>Symbol</th><th>Side</th><th>Order Type</th><th>Fill Type</th>
             <th>Qty Ordered</th><th>Qty Filled</th>
             <th>Limit $</th><th>Stop $</th><th>Fill Price</th>
             <th>Notional (Display)</th><th>TIF</th>
             <th>Status</th>
-            <th>Created</th><th>Submitted</th><th>Filled At</th>
-            <th>Canceled / Expired</th>
+            <th>Submitted</th><th>Filled At</th>
             <th>Order ID</th>
           </tr></thead>
-          <tbody id="hist-body"><tr class="loading-row"><td colspan="16">Loading…</td></tr></tbody>
+          <tbody id="hist-body"><tr class="loading-row"><td colspan="15">Loading…</td></tr></tbody>
         </table>
         <div id="hist-empty" class="empty-state" style="display:none">
           <div class="empty-icon">📋</div><div>No order history yet</div>
@@ -661,6 +705,14 @@ let GH_TOKEN = '';
 let GH_REPO  = '';
 let MULTIPLIER     = 50;
 let STARTING_EQUITY = 50000000;
+let MAX_LEVERAGE   = 100;  // % — 100 = no margin, 200 = full Alpaca margin
+
+// Position sort state
+let posSortKey = 'sym';
+let posSortAsc = true;
+// History sort state
+let histSortKey = 'date';
+let histSortAsc = false;
 
 function md(n) { return parseFloat(n || 0) * MULTIPLIER; }
 function toReal(n) { return parseFloat(n || 0) / MULTIPLIER; }
@@ -693,6 +745,7 @@ function applyPortfolio(id) {
   KEY            = cfg.key;
   SECRET         = cfg.secret;
   MULTIPLIER     = cfg.multiplier || 50;
+  MAX_LEVERAGE   = cfg.maxLeverage || 100;
   STARTING_EQUITY = cfg.startingEquity || (1000000 * MULTIPLIER);
   localStorage.setItem('pp_active_portfolio', id);
 }
@@ -776,27 +829,27 @@ function newPortfolio() {
 function loadKeys() { loadPortfolios(); }  // unified entry point
 
 function saveKeys() {
-  const name = document.getElementById('inp-port-name').value.trim() || 'My Portfolio';
-  const k    = document.getElementById('inp-key').value.trim();
-  const s    = document.getElementById('inp-secret').value.trim();
-  const ght  = document.getElementById('inp-gh-token').value.trim();
-  const ghr  = document.getElementById('inp-gh-repo').value.trim() || 'JCGandM/paper-trading';
-  const mult = parseInt(document.getElementById('inp-multiplier').value) || 50;
-  const errEl = document.getElementById('setup-error');
-  const btn   = document.getElementById('connect-btn');
+  const name   = document.getElementById('inp-port-name').value.trim() || 'My Portfolio';
+  const k      = document.getElementById('inp-key').value.trim();
+  const s      = document.getElementById('inp-secret').value.trim();
+  const ght    = document.getElementById('inp-gh-token').value.trim();
+  const ghr    = document.getElementById('inp-gh-repo').value.trim() || 'JCGandM/paper-trading';
+  const mult   = parseInt(document.getElementById('inp-multiplier').value) || 50;
+  const maxLev = parseInt(document.getElementById('inp-max-leverage').value) || 100;
+  const errEl  = document.getElementById('setup-error');
+  const btn    = document.getElementById('connect-btn');
 
   errEl.style.display = 'none';
   if (!k || !s) { errEl.textContent = 'API Key and Secret are required.'; errEl.style.display = 'block'; return; }
 
-  KEY = k; SECRET = s; GH_TOKEN = ght; GH_REPO = ghr; MULTIPLIER = mult;
+  KEY = k; SECRET = s; GH_TOKEN = ght; GH_REPO = ghr; MULTIPLIER = mult; MAX_LEVERAGE = maxLev;
   STARTING_EQUITY = 1000000 * mult;
   btn.disabled = true; btn.textContent = 'Connecting…';
 
   tapi('/v2/account').then(acct => {
     account = acct;
-    // Create or update portfolio entry
     const id = activePortId && document.getElementById('setup-title').textContent === 'Settings' ? activePortId : genPortId();
-    portfolios[id] = { name, key: k, secret: s, multiplier: mult, startingEquity: 1000000 * mult };
+    portfolios[id] = { name, key: k, secret: s, multiplier: mult, maxLeverage: maxLev, startingEquity: 1000000 * mult };
     activePortId = id;
     GH_TOKEN = ght; GH_REPO = ghr;
     savePortfolioList();
@@ -814,12 +867,13 @@ function saveKeys() {
 
 function showSetup() {
   const cfg = portCfg();
-  document.getElementById('inp-port-name').value  = cfg.name  || '';
-  document.getElementById('inp-key').value         = cfg.key   || '';
-  document.getElementById('inp-secret').value      = cfg.secret || '';
-  document.getElementById('inp-gh-token').value    = GH_TOKEN;
-  document.getElementById('inp-gh-repo').value     = GH_REPO;
-  document.getElementById('inp-multiplier').value  = cfg.multiplier || 50;
+  document.getElementById('inp-port-name').value    = cfg.name  || '';
+  document.getElementById('inp-key').value           = cfg.key   || '';
+  document.getElementById('inp-secret').value        = cfg.secret || '';
+  document.getElementById('inp-gh-token').value      = GH_TOKEN;
+  document.getElementById('inp-gh-repo').value       = GH_REPO;
+  document.getElementById('inp-multiplier').value    = cfg.multiplier || 50;
+  document.getElementById('inp-max-leverage').value  = cfg.maxLeverage || 100;
   document.getElementById('setup-title').textContent = 'Settings';
   document.getElementById('setup-error').style.display = 'none';
   document.getElementById('setup-overlay').style.display = 'flex';
@@ -943,6 +997,33 @@ function renderAccount() {
   dplEl.className = 'as-val ' + cls(dpl);
 
   document.getElementById('v-invested').textContent = `${$$(md(invested))} (${investedPct}%)`;
+
+  // Leverage = invested / equity
+  const levPct   = eq ? (invested / eq * 100) : 0;
+  const levEl    = document.getElementById('v-leverage');
+  const levLimit = MAX_LEVERAGE;
+  levEl.textContent = `${levPct.toFixed(1)}% / ${levLimit}%`;
+  levEl.className   = levPct >= levLimit * 0.95 ? 'as-val neg' : levPct >= levLimit * 0.8 ? 'as-val' : 'as-val muted';
+  if (levPct >= levLimit) levEl.style.color = 'var(--red)';
+  else if (levPct >= levLimit * 0.9) levEl.style.color = 'var(--amber)';
+  else levEl.style.color = '';
+}
+
+// ══════════════════════════════════════
+// POSITION SORTING
+// ══════════════════════════════════════
+function sortPositions(key) {
+  if (posSortKey === key) posSortAsc = !posSortAsc;
+  else { posSortKey = key; posSortAsc = key === 'sym'; }
+  renderPositions();
+  // Highlight active sort button
+  ['sym','size','gain','day'].forEach(k => {
+    const btn = document.getElementById(`sort-${k}-btn`);
+    if (btn) btn.style.borderColor = k === key ? 'var(--blue)' : '';
+    if (btn) btn.style.color = k === key ? 'var(--blue)' : '';
+  });
+  const lbl = document.getElementById('pos-sort-label');
+  if (lbl) lbl.textContent = `${key === 'sym' ? 'A→Z' : key === 'size' ? 'Size' : key === 'gain' ? 'Gain' : 'Day P&L'} ${posSortAsc ? '↑' : '↓'}`;
 }
 
 // ══════════════════════════════════════
@@ -956,7 +1037,17 @@ function renderPositions() {
   if (!positions.length) { body.innerHTML = ''; empty.style.display = 'flex'; return; }
   empty.style.display = 'none';
 
-  body.innerHTML = positions.map(p => {
+  // Sort
+  const sorted = [...positions].sort((a, b) => {
+    let va, vb;
+    if (posSortKey === 'sym')  { va = a.symbol; vb = b.symbol; return posSortAsc ? va.localeCompare(vb) : vb.localeCompare(va); }
+    if (posSortKey === 'size') { va = Math.abs(parseFloat(a.market_value)); vb = Math.abs(parseFloat(b.market_value)); }
+    if (posSortKey === 'gain') { va = parseFloat(a.unrealized_pl); vb = parseFloat(b.unrealized_pl); }
+    if (posSortKey === 'day')  { va = parseFloat(a.unrealized_intraday_pl); vb = parseFloat(b.unrealized_intraday_pl); }
+    return posSortAsc ? va - vb : vb - va;
+  });
+
+  body.innerHTML = sorted.map(p => {
     const qty   = parseFloat(p.qty);
     const short = qty < 0;
     const mv    = parseFloat(p.market_value);
@@ -985,7 +1076,11 @@ function renderPositions() {
       <td class="${cls(uplpc)}">${pp(uplpc)}</td>
       <td class="${cls(dpl)}">${$$(md(dpl),true)}</td>
       <td class="${cls(dplpc)}">${pp(dplpc)}</td>
-      <td><button class="act-btn" onclick="closePos('${p.symbol}')">Close</button></td>
+      <td style="white-space:nowrap">
+        <button class="act-btn" style="color:var(--green);border-color:var(--green)" onclick="openATPanel('${p.symbol}','add')">+ Add</button>
+        <button class="act-btn" style="margin-left:3px" onclick="openATPanel('${p.symbol}','trim')">– Trim</button>
+        <button class="act-btn cancel" style="margin-left:3px" onclick="closePos('${p.symbol}')">Close</button>
+      </td>
     </tr>`;
   }).join('');
 }
@@ -1017,42 +1112,77 @@ function renderOpenOrders() {
 }
 
 // ══════════════════════════════════════
+// HISTORY SORT
+// ══════════════════════════════════════
+function sortHistory(key) {
+  if (histSortKey === key) histSortAsc = !histSortAsc;
+  else { histSortKey = key; histSortAsc = false; }
+  renderHistory();
+}
+
+// ══════════════════════════════════════
 // RENDER HISTORY
 // ══════════════════════════════════════
 function renderHistory() {
-  const body  = document.getElementById('hist-body');
-  const empty = document.getElementById('hist-empty');
-  if (!closedOrders.length) { body.innerHTML = ''; empty.style.display = 'flex'; return; }
+  const body   = document.getElementById('hist-body');
+  const empty  = document.getElementById('hist-empty');
+  const filter = (document.getElementById('hist-filter')?.value || '').toUpperCase().trim();
+
+  let orders = [...closedOrders];
+  if (filter) orders = orders.filter(o => o.symbol.includes(filter));
+
+  // Sort
+  orders.sort((a, b) => {
+    if (histSortKey === 'date') {
+      const ta = new Date(a.submitted_at || 0).getTime();
+      const tb = new Date(b.submitted_at || 0).getTime();
+      return histSortAsc ? ta - tb : tb - ta;
+    }
+    if (histSortKey === 'sym') return histSortAsc ? a.symbol.localeCompare(b.symbol) : b.symbol.localeCompare(a.symbol);
+    if (histSortKey === 'notional') {
+      const na = (parseFloat(a.filled_qty||0) * parseFloat(a.filled_avg_price||0));
+      const nb = (parseFloat(b.filled_qty||0) * parseFloat(b.filled_avg_price||0));
+      return histSortAsc ? na - nb : nb - na;
+    }
+    return 0;
+  });
+
+  if (!orders.length) { body.innerHTML = ''; empty.style.display = 'flex'; return; }
   empty.style.display = 'none';
-  body.innerHTML = closedOrders.map(o => {
+
+  // Fill type: derive from whether fill price matches limit or was market
+  function fillType(o) {
+    if (!o.filled_avg_price) return '—';
+    if (o.type === 'market')       return '<span style="color:var(--amber)">MARKET</span>';
+    if (o.type === 'limit')        return '<span style="color:var(--blue)">LIMIT</span>';
+    if (o.type === 'stop')         return '<span style="color:var(--red)">STOP</span>';
+    if (o.type === 'stop_limit')   return '<span style="color:var(--red)">STOP-LIMIT</span>';
+    if (o.type === 'trailing_stop') return '<span style="color:var(--muted)">TRAIL</span>';
+    return o.type;
+  }
+
+  body.innerHTML = orders.map(o => {
     const fq   = parseFloat(o.filled_qty || 0);
     const fp   = parseFloat(o.filled_avg_price || 0);
     const notl = fq && fp ? fq * fp : null;
-    // Determine end timestamp — filled, canceled, or expired
-    const endTs = o.filled_at || o.canceled_at || o.expired_at || o.replaced_at || null;
-    const endLbl = o.filled_at ? fdt(o.filled_at)
-                 : o.canceled_at ? fdt(o.canceled_at)
-                 : o.expired_at  ? fdt(o.expired_at)
-                 : '—';
     const shortId = o.id ? o.id.slice(0, 8) + '…' : '—';
 
     return `<tr>
       <td class="sym">${o.symbol}</td>
-      <td class="${o.side === 'buy' ? 'pos' : 'neg'}">${o.side.toUpperCase()}</td>
+      <td class="${o.side==='buy'?'pos':'neg'}">${o.side.toUpperCase()}</td>
       <td class="dim">${o.type}</td>
+      <td>${fillType(o)}</td>
       <td>${o.qty}</td>
-      <td>${fq || '—'}</td>
-      <td class="dim">${o.limit_price ? $$(o.limit_price) : '—'}</td>
-      <td class="dim">${o.stop_price  ? $$(o.stop_price)  : '—'}</td>
-      <td class="${fp ? 'pos' : 'dim'}">${fp ? $$(fp) : '—'}</td>
-      <td class="${notl ? (o.side === 'buy' ? 'pos' : 'neg') : 'dim'}">${notl ? $$(md(notl)) : '—'}</td>
-      <td class="dim">${(o.time_in_force || '').toUpperCase()}</td>
+      <td>${fq||'—'}</td>
+      <td class="dim">${o.limit_price?$$(o.limit_price):'—'}</td>
+      <td class="dim">${o.stop_price?$$(o.stop_price):'—'}</td>
+      <td class="${fp?'pos':'dim'}">${fp?$$(fp):'—'}</td>
+      <td class="${notl?(o.side==='buy'?'pos':'neg'):'dim'}">${notl?$$(md(notl)):'—'}</td>
+      <td class="dim">${(o.time_in_force||'').toUpperCase()}</td>
       <td class="st-${o.status}">${o.status}</td>
-      <td class="dim" style="font-size:10px">${fdt(o.created_at)}</td>
       <td class="dim" style="font-size:10px">${fdt(o.submitted_at)}</td>
-      <td class="${o.filled_at ? 'pos' : 'dim'}" style="font-size:10px">${o.filled_at ? fdt(o.filled_at) : '—'}</td>
-      <td class="${(o.canceled_at || o.expired_at) ? 'neg' : 'dim'}" style="font-size:10px">${endLbl !== fdt(o.filled_at) ? endLbl : '—'}</td>
-      <td class="dim" style="font-size:10px" title="${o.id || ''}">${shortId}</td>
+      <td class="${o.filled_at?'pos':'dim'}" style="font-size:10px">${o.filled_at?fdt(o.filled_at):'—'}</td>
+      <td class="dim" style="font-size:10px" title="${o.id||''}">${shortId}</td>
     </tr>`;
   }).join('');
 }
@@ -1166,6 +1296,8 @@ function onTypeChange() {
   updateCapPreview();
 }
 
+function otErr(msg) { const el = document.getElementById('ot-err'); el.textContent = msg; el.style.display = 'block'; }
+
 async function submitOrder() {
   const sym   = document.getElementById('ot-sym').value.trim().toUpperCase();
   const qty   = document.getElementById('ot-qty').value;
@@ -1177,15 +1309,22 @@ async function submitOrder() {
   const errEl = document.getElementById('ot-err');
   errEl.style.display = 'none';
 
-  if (!sym)                                                          return otErr('Symbol required');
-  if (!qty || parseFloat(qty) <= 0)                                 return otErr('Valid quantity required');
-  if (['limit','stop_limit'].includes(type) && !limit)              return otErr('Limit price required');
-  if (['stop','stop_limit'].includes(type)  && !stop)               return otErr('Stop price required');
-  if (type === 'trailing_stop' && !trail)                           return otErr('Trail % required');
+  if (!sym)                                                     return otErr('Symbol required');
+  if (!qty || parseFloat(qty) <= 0)                            return otErr('Valid quantity required');
+  if (['limit','stop_limit'].includes(type) && !limit)         return otErr('Limit price required');
+  if (['stop','stop_limit'].includes(type)  && !stop)          return otErr('Stop price required');
+  if (type === 'trailing_stop' && !trail)                      return otErr('Trail % required');
+
+  // Leverage check (buy orders only)
+  if (side === 'buy' && lastAskPrice) {
+    const orderCost = (parseFloat(qty) / MULTIPLIER) * lastAskPrice;
+    const levErr = checkLeverage(orderCost);
+    if (levErr) return otErr(levErr);
+  }
 
   const body = { symbol:sym, qty: (parseFloat(qty) / MULTIPLIER).toString(), side, type, time_in_force:tif };
-  if (limit) body.limit_price  = parseFloat(limit).toFixed(2);
-  if (stop)  body.stop_price   = parseFloat(stop).toFixed(2);
+  if (limit) body.limit_price   = parseFloat(limit).toFixed(2);
+  if (stop)  body.stop_price    = parseFloat(stop).toFixed(2);
   if (trail) body.trail_percent = parseFloat(trail).toFixed(2);
 
   const btn = document.getElementById('submit-btn');
@@ -1200,7 +1339,108 @@ async function submitOrder() {
   finally { btn.disabled = false; setSide(side); }
 }
 
-function otErr(msg) { const el = document.getElementById('ot-err'); el.textContent = msg; el.style.display = 'block'; }
+// ══════════════════════════════════════
+// ADD / TRIM PANEL
+// ══════════════════════════════════════
+let atSym = '', atMode = 'add', atPrice = null;
+
+function openATPanel(sym, mode) {
+  atSym = sym; atMode = mode;
+  setATMode(mode);
+  document.getElementById('at-title').textContent = sym;
+  document.getElementById('at-shares').value = '';
+  document.getElementById('at-cost').textContent = '—';
+  document.getElementById('at-cap-chg').textContent = '—';
+  document.getElementById('at-new-qty').textContent = '—';
+  document.getElementById('at-new-pct').textContent = '—';
+  document.getElementById('addtrim-panel').style.display = 'block';
+  document.getElementById('at-shares').focus();
+  // Get price from positions
+  const pos = positions.find(p => p.symbol === sym);
+  atPrice = pos ? parseFloat(pos.current_price) : null;
+  updateATPreview();
+}
+
+function closeATPanel() {
+  document.getElementById('addtrim-panel').style.display = 'none';
+  atSym = ''; atPrice = null;
+}
+
+function setATMode(mode) {
+  atMode = mode;
+  document.getElementById('at-add-btn').classList.toggle('on', mode === 'add');
+  document.getElementById('at-trim-btn').classList.toggle('on', mode === 'trim');
+  const btn = document.getElementById('at-submit-btn');
+  btn.className = 'submit-btn ' + (mode === 'add' ? 'sbuy' : 'ssell');
+  btn.style.cssText = 'padding:6px 16px;width:auto';
+  btn.textContent = mode === 'add' ? '+ Add Shares' : '– Trim Shares';
+  updateATPreview();
+}
+
+function updateATPreview() {
+  if (!atSym || !atPrice) return;
+  const shares = parseFloat(document.getElementById('at-shares').value) || 0;
+  const pv     = parseFloat(account.portfolio_value || 0);
+  const pos    = positions.find(p => p.symbol === atSym);
+  const curQty = pos ? Math.abs(parseFloat(pos.qty)) : 0;
+
+  const realShares = shares / MULTIPLIER;  // actual API shares
+  const cost    = realShares * atPrice;
+  const capChg  = pv ? cost / pv * 100 : 0;
+  const newQty  = atMode === 'add' ? curQty + realShares : curQty - realShares;
+  const newMV   = newQty * atPrice;
+  const newPct  = pv ? newMV / pv * 100 : 0;
+
+  const chgColor = atMode === 'add' ? 'var(--green)' : 'var(--amber)';
+  document.getElementById('at-cost').textContent    = $$(md(cost));
+  document.getElementById('at-cost').style.color    = chgColor;
+  document.getElementById('at-cap-chg').textContent = `${atMode==='add'?'+':'-'}${capChg.toFixed(2)}%`;
+  document.getElementById('at-cap-chg').style.color = chgColor;
+  document.getElementById('at-new-qty').textContent = shares ? newQty.toFixed(3) * MULTIPLIER : '—';
+  document.getElementById('at-new-pct').textContent = shares ? newPct.toFixed(2)+'%' : '—';
+  const newPctEl = document.getElementById('at-new-pct');
+  newPctEl.style.color = newPct > 20 ? 'var(--amber)' : 'var(--green)';
+}
+
+async function submitATOrder() {
+  const sharesDisplay = parseFloat(document.getElementById('at-shares').value);
+  if (!sharesDisplay || sharesDisplay <= 0) { alert('Enter number of shares'); return; }
+  const btn  = document.getElementById('at-submit-btn');
+  const side = atMode === 'add' ? 'buy' : 'sell';
+  btn.disabled = true; btn.textContent = 'Submitting…';
+  try {
+    const body = {
+      symbol: atSym,
+      qty: (sharesDisplay / MULTIPLIER).toString(),
+      side, type: 'market', time_in_force: 'day'
+    };
+    await tapi('/v2/orders', { method:'POST', body:JSON.stringify(body) });
+    closeATPanel();
+    await refresh();
+    showTab('open');
+  } catch(e) {
+    alert('Order failed: ' + e.message);
+    btn.disabled = false;
+    setATMode(atMode);
+  }
+}
+
+// ══════════════════════════════════════
+// LEVERAGE CHECK HELPER
+// ══════════════════════════════════════
+function checkLeverage(addCost) {
+  if (MAX_LEVERAGE >= 200) return null; // no restriction
+  const eq  = parseFloat(account.equity || 0);
+  const lmv = parseFloat(account.long_market_value || 0);
+  const smv = Math.abs(parseFloat(account.short_market_value || 0));
+  const currentInvested = lmv + smv;
+  const maxInvested = eq * (MAX_LEVERAGE / 100);
+  if (currentInvested + addCost > maxInvested) {
+    const allowed = Math.max(0, maxInvested - currentInvested);
+    return `Leverage limit (${MAX_LEVERAGE}%) reached. Max additional buy: ${$$(md(allowed))}`;
+  }
+  return null;
+}
 
 async function cancelOrder(id, btn) {
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
@@ -1900,7 +2140,7 @@ function renderBatchRows() {
       ? `${$$(r.price)} <span style="font-size:9px;color:var(--dim)">${r.priceSource}</span>`
       : `<span style="color:var(--dim)">—</span>`;
 
-    return `<tr>
+    return `<tr data-batch-id="${r.id}">
       <td>
         <input class="ot-in" style="width:80px;text-transform:uppercase;font-weight:700" type="text"
           value="${r.symbol}" placeholder="AAPL"
@@ -1915,14 +2155,15 @@ function renderBatchRows() {
         </select>
       </td>
       <td>
-        <input class="ot-in" style="width:80px" type="number" min="0.001" step="any"
+        <input class="ot-in" style="width:90px" type="number" min="0.001" step="any"
           value="${r.shares}" placeholder="0"
-          oninput="updateBatchField(${r.id},'shares',this.value)"
+          oninput="updateBatchShares(${r.id}, this.value)"
+          onblur="renderBatchRows()"
           ${['submitting','filled'].includes(r.status) ? 'disabled' : ''}>
       </td>
       <td>${priceDisplay}</td>
-      <td>${cost ? $$(md(cost)) : '—'}</td>
-      <td style="color:${capColor};font-weight:700">${capPct != null ? capPct.toFixed(2)+'%' : '—'}</td>
+      <td class="batch-cost-cell">${cost ? $$(md(cost)) : '—'}</td>
+      <td class="batch-pct-cell" style="color:${capColor};font-weight:700">${capPct != null ? capPct.toFixed(2)+'%' : '—'}</td>
       <td>${statusHtml}</td>
       <td>
         <button class="act-btn" onclick="removeBatchRow(${r.id})"
@@ -1940,6 +2181,27 @@ function updateBatchSym(id, val) {
   r.symbol = val.trim().toUpperCase();
   r.price = null; r.priceSource = '';
   if (r.symbol) batchFetchPrice(id, r.symbol);
+  updateBatchSummary();
+}
+
+// Called oninput — updates data without re-rendering the table (fixes focus loss)
+function updateBatchShares(id, val) {
+  const r = batchRows.find(r => r.id === id);
+  if (!r) return;
+  r.shares = val;
+  // Update just the cost and % cells for this row inline
+  const pv = parseFloat(account.portfolio_value || 0);
+  const cost = (r.price && val) ? r.price * parseFloat(val) : null;
+  const capPct = (cost && pv) ? (cost / pv * 100) : null;
+  const capColor = !capPct ? 'var(--dim)' : capPct > 25 ? 'var(--red)' : capPct > 10 ? 'var(--amber)' : 'var(--green)';
+  const row = document.querySelector(`tr[data-batch-id="${id}"]`);
+  if (row) {
+    const costCell = row.querySelector('.batch-cost-cell');
+    const pctCell  = row.querySelector('.batch-pct-cell');
+    if (costCell) costCell.textContent = cost ? $$(md(cost)).replace(/[^$\d,.]/g,'') : '—';
+    if (costCell) costCell.textContent = cost ? $$(md(cost)) : '—';
+    if (pctCell)  { pctCell.textContent = capPct != null ? capPct.toFixed(2)+'%' : '—'; pctCell.style.color = capColor; }
+  }
   updateBatchSummary();
 }
 
@@ -2007,7 +2269,14 @@ async function submitBatch() {
   resEl.style.display = 'none';
 
   const toSubmit = batchRows.filter(r => r.symbol && r.shares && parseFloat(r.shares) > 0 && r.status === 'pending');
-  if (!toSubmit.length) { errEl.textContent = 'No valid orders to submit. Add rows with a symbol and share count.'; errEl.style.display = 'block'; return; }
+  if (!toSubmit.length) { errEl.textContent = 'No valid orders to submit.'; errEl.style.display = 'block'; return; }
+
+  // Leverage check across all buy rows
+  const totalBuyCost = toSubmit
+    .filter(r => r.side === 'buy' && r.price)
+    .reduce((s, r) => s + (parseFloat(r.shares) / MULTIPLIER) * r.price, 0);
+  const levErr = checkLeverage(totalBuyCost);
+  if (levErr) { errEl.textContent = levErr; errEl.style.display = 'block'; return; }
 
   const orderType = document.getElementById('batch-type').value;
   const tif = 'day'; // always day — market open will fill
@@ -2094,6 +2363,7 @@ async function startApp() {
     KEY           = cfg.key;
     SECRET        = cfg.secret;
     MULTIPLIER    = cfg.multiplier || 50;
+    MAX_LEVERAGE  = cfg.maxLeverage || 100;
     STARTING_EQUITY = cfg.startingEquity || (1000000 * MULTIPLIER);
     GH_TOKEN      = ghToken;
     GH_REPO       = ghRepo;
