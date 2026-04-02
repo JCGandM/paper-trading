@@ -883,10 +883,11 @@ function showSetup() {
 // API HELPERS
 // ══════════════════════════════════════
 async function req(base, path, opts = {}) {
-  const r = await fetch(base + path, {
-    ...opts,
-    headers: { 'APCA-API-KEY-ID': KEY, 'APCA-API-SECRET-KEY': SECRET, 'Content-Type': 'application/json', ...(opts.headers || {}) }
-  });
+  const method = (opts.method || 'GET').toUpperCase();
+  // Content-Type on GET triggers CORS preflight that data.alpaca.markets blocks
+  const headers = { 'APCA-API-KEY-ID': KEY, 'APCA-API-SECRET-KEY': SECRET, ...(opts.headers || {}) };
+  if (method !== 'GET') headers['Content-Type'] = 'application/json';
+  const r = await fetch(base + path, { ...opts, headers });
   const txt = await r.text();
   if (!r.ok) { let m = txt; try { m = JSON.parse(txt).message || txt; } catch {} throw new Error(m); }
   return txt ? JSON.parse(txt) : null;
