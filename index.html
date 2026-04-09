@@ -229,6 +229,16 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 <!-- ══ SETUP ══ -->
 <div id="setup-overlay">
   <div id="setup-panel">
+    <!-- Back button — only shown when editing existing portfolio (not first-time setup) -->
+    <button id="setup-back-btn" onclick="closeSetup()"
+      style="display:none;background:none;border:1px solid var(--border2);color:var(--muted);
+             border-radius:2px;padding:5px 12px;cursor:pointer;font-family:var(--mono);
+             font-size:10px;font-weight:700;letter-spacing:.08em;margin-bottom:20px;
+             transition:all .15s"
+      onmouseover="this.style.borderColor='var(--text)';this.style.color='var(--text)'"
+      onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--muted)'">
+      ← Back
+    </button>
     <div class="setup-logo"><span>◈</span> PaperPort</div>
     <h2 id="setup-title">Connect your account</h2>
     <p>Sign up free at <a href="https://alpaca.markets" target="_blank">alpaca.markets</a> and grab your Paper Trading API keys.</p>
@@ -267,6 +277,41 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
       <label class="setup-label">GitHub Repo (owner/repo)</label>
       <input id="inp-gh-repo" class="setup-input" type="text" placeholder="JCGandM/paper-trading" autocomplete="off" spellcheck="false">
     </div>
+
+    <!-- STOCK SPLIT ADJUSTMENTS -->
+    <div class="setup-section">Stock Split Adjustments
+      <span style="color:var(--dim);font-size:9px;font-weight:400;text-transform:none;letter-spacing:0">
+        — Alpaca doesn't auto-adjust paper positions. Enter splits manually here.
+      </span>
+    </div>
+    <div class="fb-optional" style="margin-bottom:10px">
+      Enter the split ratio as <strong style="color:var(--text)">new shares per old share</strong>
+      (e.g. BKNG 25:1 split → symbol BKNG, ratio 25). This adjusts your displayed avg entry price and share count.
+      Alpaca's actual position data is unchanged — this is a display correction only.
+    </div>
+
+    <!-- Add split row -->
+    <div style="display:flex;gap:6px;margin-bottom:8px;align-items:flex-end">
+      <div style="flex:1.2">
+        <label class="setup-label">Symbol</label>
+        <input id="split-sym" class="setup-input" type="text" placeholder="BKNG" style="text-transform:uppercase" spellcheck="false">
+      </div>
+      <div style="flex:1">
+        <label class="setup-label">Ratio (new:old)</label>
+        <input id="split-ratio" class="setup-input" type="number" min="0.001" step="any" placeholder="25">
+      </div>
+      <div style="flex:1.2">
+        <label class="setup-label">Effective Date</label>
+        <input id="split-date" class="setup-input" type="date">
+      </div>
+      <div style="flex:0.7">
+        <label class="setup-label">&nbsp;</label>
+        <button class="btn-connect" style="padding:9px 10px;font-size:10px" onclick="addSplitAdjustment()">+ Add</button>
+      </div>
+    </div>
+
+    <!-- Existing splits table -->
+    <div id="splits-list" style="margin-bottom:14px"></div>
 
     <div id="setup-error"></div>
     <button class="btn-connect" id="connect-btn" onclick="saveKeys()">Connect to Alpaca Paper →</button>
@@ -809,6 +854,7 @@ function applyPortfolio(id) {
   MAX_LEVERAGE   = cfg.maxLeverage || 100;
   STARTING_EQUITY = cfg.startingEquity || (1000000 * MULTIPLIER);
   localStorage.setItem('pp_active_portfolio', id);
+  loadSplitAdjustments();
 }
 
 function savePortfolioList() {
@@ -874,15 +920,17 @@ function deletePortfolio(id) {
 
 function newPortfolio() {
   document.getElementById('port-dropdown').classList.remove('open');
-  // Pre-fill setup with empty fields for new portfolio
   document.getElementById('inp-port-name').value  = '';
   document.getElementById('inp-key').value         = '';
   document.getElementById('inp-secret').value      = '';
   document.getElementById('inp-gh-token').value    = GH_TOKEN;
   document.getElementById('inp-gh-repo').value     = GH_REPO;
   document.getElementById('inp-multiplier').value  = '50';
+  document.getElementById('inp-max-leverage').value = '100';
   document.getElementById('setup-title').textContent = 'Add Portfolio';
   document.getElementById('setup-error').style.display = 'none';
+  document.getElementById('setup-back-btn').style.display = 'none'; // no back on new portfolio
+  document.getElementById('splits-list').innerHTML = '<div style="font-size:10px;color:var(--dim);padding:6px 0">Save portfolio first, then add split adjustments.</div>';
   document.getElementById('setup-overlay').style.display = 'flex';
 }
 
@@ -937,6 +985,10 @@ function showSetup() {
   document.getElementById('inp-max-leverage').value  = cfg.maxLeverage || 100;
   document.getElementById('setup-title').textContent = 'Settings';
   document.getElementById('setup-error').style.display = 'none';
+  // Show back button when editing existing portfolio
+  document.getElementById('setup-back-btn').style.display = 'block';
+  // Render current splits
+  renderSplitsList();
   document.getElementById('setup-overlay').style.display = 'flex';
 }
 
@@ -1110,7 +1162,9 @@ function renderPositions() {
     return posSortAsc ? va - vb : vb - va;
   });
 
-  body.innerHTML = sorted.map(p => {
+  body.innerHTML = sorted.map(rawP => {
+    // Apply split correction to ALL affected fields before display
+    const p     = getSplitAdjustedPosition(rawP);
     const qty   = parseFloat(p.qty);
     const short = qty < 0;
     const mv    = parseFloat(p.market_value);
@@ -1122,11 +1176,17 @@ function renderPositions() {
     const barW  = Math.min(allocPct, 100).toFixed(1);
     const barColor = allocPct > 20 ? 'var(--amber)' : allocPct > 10 ? 'var(--blue)' : 'var(--green)';
 
+    const splitMult  = p._splitMult || 1;
+    const adjEntry   = parseFloat(p.avg_entry_price);
+    const splitBadge = splitMult !== 1
+      ? `<span title="Split-adjusted ${splitMult}:1 — avg entry, cost basis, and P&L corrected" style="font-size:8px;background:var(--amber-bg);color:var(--amber);border:1px solid rgba(240,165,0,.3);border-radius:2px;padding:0 3px;margin-left:3px;cursor:default">${splitMult}:1</span>`
+      : '';
+
     return `<tr>
-      <td class="sym">${p.symbol}</td>
+      <td class="sym">${p.symbol}${splitBadge}</td>
       <td class="${short?'neg':'pos'}">${short?'SHORT':'LONG'}</td>
       <td>${Math.abs(qty)}</td>
-      <td>${$$(p.avg_entry_price)}</td>
+      <td>${$$(adjEntry)}</td>
       <td>${$$(p.current_price)}</td>
       <td>${$$(md(mv))}</td>
       <td>
@@ -2059,20 +2119,22 @@ function exportExcel() {
     ['OPEN POSITIONS'],
     ['Symbol','Side','Qty','Avg Entry','Current','Mkt Value','Cost Basis','% of Equity','Unr P&L ($)','Unr P&L (%)','Day P&L ($)','Day P&L (%)'],
     ...positions.map(p => {
-      const mv = md(parseFloat(p.market_value));
+      const ap     = getSplitAdjustedPosition(p);
+      const mv     = md(parseFloat(ap.market_value));
+      const splitM = ap._splitMult || 1;
       return [
-        p.symbol,
-        parseFloat(p.qty)>=0?'Long':'Short',
-        Math.abs(parseFloat(p.qty)),
-        parseFloat(p.avg_entry_price),
-        parseFloat(p.current_price),
+        ap.symbol + (splitM !== 1 ? ` (${splitM}:1 adj)` : ''),
+        parseFloat(ap.qty)>=0?'Long':'Short',
+        Math.abs(parseFloat(ap.qty)),
+        parseFloat(ap.avg_entry_price),
+        parseFloat(ap.current_price),
         mv,
-        md(parseFloat(p.cost_basis)),
+        md(parseFloat(ap.cost_basis)),
         pv ? parseFloat((Math.abs(mv)/pv*100).toFixed(2)) : 0,
-        md(parseFloat(p.unrealized_pl)),
-        parseFloat((parseFloat(p.unrealized_plpc)*100).toFixed(4)),
-        md(parseFloat(p.unrealized_intraday_pl)),
-        parseFloat((parseFloat(p.unrealized_intraday_plpc)*100).toFixed(4))
+        md(parseFloat(ap.unrealized_pl)),
+        parseFloat((parseFloat(ap.unrealized_plpc)*100).toFixed(4)),
+        md(parseFloat(ap.unrealized_intraday_pl)),
+        parseFloat((parseFloat(ap.unrealized_intraday_plpc)*100).toFixed(4))
       ];
     })
   ];
@@ -2097,20 +2159,22 @@ function exportExcel() {
   // ── Sheet 3: P&L ──
   const pHdr = ['Symbol','Side','Qty','Avg Entry','Current','Mkt Value','Cost Basis','% of Equity','Unr P&L ($)','Unr P&L (%)','Day P&L ($)','Day P&L (%)'];
   const pRows = positions.map(p => {
-    const mv = md(parseFloat(p.market_value));
+    const ap     = getSplitAdjustedPosition(p);
+    const mv     = md(parseFloat(ap.market_value));
+    const splitM = ap._splitMult || 1;
     return [
-      p.symbol,
-      parseFloat(p.qty)>=0?'Long':'Short',
-      Math.abs(parseFloat(p.qty)),
-      parseFloat(p.avg_entry_price),
-      parseFloat(p.current_price),
+      ap.symbol + (splitM !== 1 ? ` (${splitM}:1 adj)` : ''),
+      parseFloat(ap.qty)>=0?'Long':'Short',
+      Math.abs(parseFloat(ap.qty)),
+      parseFloat(ap.avg_entry_price),
+      parseFloat(ap.current_price),
       mv,
-      md(parseFloat(p.cost_basis)),
+      md(parseFloat(ap.cost_basis)),
       pv ? parseFloat((Math.abs(mv)/pv*100).toFixed(2)) : 0,
-      md(parseFloat(p.unrealized_pl)),
-      parseFloat((parseFloat(p.unrealized_plpc)*100).toFixed(4)),
-      md(parseFloat(p.unrealized_intraday_pl)),
-      parseFloat((parseFloat(p.unrealized_intraday_plpc)*100).toFixed(4))
+      md(parseFloat(ap.unrealized_pl)),
+      parseFloat((parseFloat(ap.unrealized_plpc)*100).toFixed(4)),
+      md(parseFloat(ap.unrealized_intraday_pl)),
+      parseFloat((parseFloat(ap.unrealized_intraday_plpc)*100).toFixed(4))
     ];
   });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([pHdr,...pRows]), 'P&L');
@@ -2487,10 +2551,13 @@ function computePositionMetrics() {
   if (!positions.length) return null;
   const pv = parseFloat(account.portfolio_value || 0);
 
-  const winners = positions.filter(p => parseFloat(p.unrealized_pl) > 0);
-  const losers  = positions.filter(p => parseFloat(p.unrealized_pl) < 0);
+  // Use split-adjusted positions for accurate win rate / P&L analytics
+  const adjPositions = positions.map(getSplitAdjustedPosition);
 
-  const winRate  = positions.length ? (winners.length / positions.length * 100) : 0;
+  const winners = adjPositions.filter(p => parseFloat(p.unrealized_pl) > 0);
+  const losers  = adjPositions.filter(p => parseFloat(p.unrealized_pl) < 0);
+
+  const winRate  = adjPositions.length ? (winners.length / adjPositions.length * 100) : 0;
   const avgWin   = winners.length ? mean(winners.map(p => parseFloat(p.unrealized_pl))) : 0;
   const avgLoss  = losers.length  ? mean(losers.map(p => parseFloat(p.unrealized_pl)))  : 0;
   const profitFactor = Math.abs(avgLoss) > 0 ? Math.abs(avgWin) / Math.abs(avgLoss) : null;
@@ -2498,7 +2565,7 @@ function computePositionMetrics() {
   const cash = parseFloat(account.cash || 0);
   const cashDragPct = pv > 0 ? cash / pv * 100 : 0;
 
-  // Today's contributors — sorted by intraday P&L
+  // Today's contributors — intraday P&L is already correct from Alpaca (not split-affected)
   const contributors = [...positions]
     .map(p => ({
       symbol: p.symbol,
@@ -2507,11 +2574,11 @@ function computePositionMetrics() {
     }))
     .sort((a, b) => b.pl - a.pl);
 
-  // Concentration — HHI (Herfindahl index)
+  // Concentration — HHI (Herfindahl index) — market_value is correct regardless of split
   const weights = positions.map(p => Math.abs(parseFloat(p.market_value)) / pv);
-  const hhi = weights.reduce((s, w) => s + w * w, 0) * 100; // 0-100, higher = more concentrated
+  const hhi = weights.reduce((s, w) => s + w * w, 0) * 100;
 
-  // Sector breakdown
+  // Sector breakdown — market_value is correct
   const sectorTotals = {};
   for (const p of positions) {
     const sec = getSector(p.symbol);
@@ -2577,7 +2644,7 @@ function renderAnalytics() {
     const cashColor = pos.cashDragPct > 30 ? 'var(--amber)' : pos.cashDragPct > 50 ? 'var(--red)' : 'var(--muted)';
     const hhiColor  = pos.hhi > 25 ? 'var(--red)' : pos.hhi > 15 ? 'var(--amber)' : 'var(--green)';
     tradeEl.innerHTML =
-      metricCard('Win Rate',       pos.winRate.toFixed(1)+'%', `${positions.filter(p=>parseFloat(p.unrealized_pl)>0).length} of ${positions.length} positions`) +
+      metricCard('Win Rate',       pos.winRate.toFixed(1)+'%', `${positions.map(getSplitAdjustedPosition).filter(p=>parseFloat(p.unrealized_pl)>0).length} of ${positions.length} positions`) +
       metricCard('Avg Winner',     $$(md(pos.avgWin),true),    'Unrealized P&L') +
       metricCard('Avg Loser',      $$(md(pos.avgLoss),true),   'Unrealized P&L') +
       metricCard('Profit Factor',  pos.profitFactor != null ? pos.profitFactor.toFixed(2) : '—', '|Avg Win| ÷ |Avg Loss|', pfColor) +
@@ -2804,12 +2871,158 @@ function renderSparklines(barData) {
 }
 
 // ══════════════════════════════════════
+// STOCK SPLIT ADJUSTMENTS
+// Alpaca doesn't auto-adjust paper positions after splits.
+// We store corrections in localStorage and apply them at display time only.
+// Alpaca's raw data is never modified — this is purely a view layer.
+// ══════════════════════════════════════
+
+let splitAdjustments = []; // [{ symbol, ratio, date, note }]
+
+function loadSplitAdjustments() {
+  try {
+    splitAdjustments = JSON.parse(localStorage.getItem(`pp_${activePortId}_splits`) || '[]');
+  } catch { splitAdjustments = []; }
+}
+
+function saveSplitAdjustments() {
+  localStorage.setItem(`pp_${activePortId}_splits`, JSON.stringify(splitAdjustments));
+}
+
+// ── WHAT ALPACA GETS WRONG AFTER A SPLIT ──
+// Alpaca updates: qty (post-split), current_price (post-split), market_value (correct)
+// Alpaca does NOT update: avg_entry_price (stays pre-split)
+// Result: cost_basis = qty × raw_entry = post-split_qty × pre-split_price = WRONG
+//         unrealized_pl = market_value - wrong_cost_basis = WRONG
+//         unrealized_plpc = wrong_pl / wrong_cost_basis = WRONG
+//
+// These are ALREADY CORRECT and never need adjustment:
+//   qty, current_price, market_value
+//   unrealized_intraday_pl, unrealized_intraday_plpc, change_today
+//   account.equity, portfolio_value (use market values — unaffected)
+//
+// THE FIX: cost_basis_adj = raw_cost_basis / splitMult (= qty × adj_entry = true $ invested)
+//          unrealized_pl_adj = market_value - cost_basis_adj
+//          unrealized_plpc_adj = unrealized_pl_adj / cost_basis_adj
+
+// Get the cumulative split multiplier for a symbol
+// (handles multiple splits on the same symbol over time)
+function getSplitMultiplier(symbol) {
+  const syms = splitAdjustments.filter(s => s.symbol === symbol.toUpperCase());
+  if (!syms.length) return 1;
+  return syms.reduce((acc, s) => acc * parseFloat(s.ratio), 1);
+}
+
+// Returns a corrected copy of a position object for display and analytics.
+// All dollar amounts that flow through avg_entry_price are fixed.
+// Fields that are already correct (qty, market_value, intraday P&L) are unchanged.
+function getSplitAdjustedPosition(p) {
+  const mult = getSplitMultiplier(p.symbol);
+  if (mult === 1) return { ...p, _splitMult: 1 };
+
+  const mv          = parseFloat(p.market_value);
+  const rawCost     = parseFloat(p.cost_basis);
+  const adjEntry    = parseFloat(p.avg_entry_price) / mult;
+  const adjCost     = rawCost / mult;                 // true dollars originally invested
+  const adjPL       = mv - adjCost;                   // actual gain/loss in dollars
+  const adjPLpct    = adjCost !== 0 ? adjPL / adjCost : 0;  // actual % return (as decimal)
+
+  return {
+    ...p,
+    _splitMult:       mult,
+    _splitAdjusted:   true,
+    avg_entry_price:  adjEntry.toFixed(6),
+    cost_basis:       adjCost.toFixed(6),
+    unrealized_pl:    adjPL.toFixed(6),
+    unrealized_plpc:  adjPLpct.toFixed(8),
+    // qty, current_price, market_value, unrealized_intraday_pl,
+    // unrealized_intraday_plpc, change_today — all left unchanged (correct as-is)
+  };
+}
+
+function addSplitAdjustment() {
+  const sym   = document.getElementById('split-sym').value.trim().toUpperCase();
+  const ratio = parseFloat(document.getElementById('split-ratio').value);
+  const date  = document.getElementById('split-date').value;
+
+  if (!sym)         { alert('Enter a symbol.'); return; }
+  if (!ratio || ratio <= 0) { alert('Enter a valid ratio (e.g. 25 for a 25:1 split).'); return; }
+  if (!date)        { alert('Enter the effective date of the split.'); return; }
+
+  // Prevent duplicate on same symbol + date
+  const dup = splitAdjustments.find(s => s.symbol === sym && s.date === date);
+  if (dup) { alert(`A split adjustment for ${sym} on ${date} already exists. Remove it first if you need to change it.`); return; }
+
+  splitAdjustments.push({ symbol: sym, ratio, date, addedAt: new Date().toISOString() });
+  splitAdjustments.sort((a, b) => a.date.localeCompare(b.date));
+  saveSplitAdjustments();
+  renderSplitsList();
+  renderPositions(); // re-render positions with new adjustment applied
+
+  // Clear inputs
+  document.getElementById('split-sym').value   = '';
+  document.getElementById('split-ratio').value = '';
+  document.getElementById('split-date').value  = '';
+}
+
+function removeSplitAdjustment(symbol, date) {
+  if (!confirm(`Remove split adjustment for ${symbol} on ${date}?`)) return;
+  splitAdjustments = splitAdjustments.filter(s => !(s.symbol === symbol && s.date === date));
+  saveSplitAdjustments();
+  renderSplitsList();
+  renderPositions();
+}
+
+function renderSplitsList() {
+  const el = document.getElementById('splits-list');
+  if (!el) return;
+  if (!splitAdjustments.length) {
+    el.innerHTML = `<div style="font-size:10px;color:var(--dim);padding:6px 0">No split adjustments recorded.</div>`;
+    return;
+  }
+  el.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:11px">
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:4px 8px;font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--border)">Symbol</th>
+          <th style="text-align:left;padding:4px 8px;font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--border)">Ratio (N:1)</th>
+          <th style="text-align:left;padding:4px 8px;font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--border)">Effective Date</th>
+          <th style="text-align:left;padding:4px 8px;font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--border)">Adj. Entry Price</th>
+          <th style="padding:4px 8px;border-bottom:1px solid var(--border)"></th>
+        </tr>
+      </thead>
+      <tbody>
+        ${splitAdjustments.map(s => {
+          const pos = positions.find(p => p.symbol === s.symbol);
+          const rawEntry = pos ? parseFloat(pos.avg_entry_price) : null;
+          const adjEntry = rawEntry ? rawEntry / parseFloat(s.ratio) : null;
+          return `<tr style="border-bottom:1px solid rgba(30,45,66,.4)">
+            <td style="padding:6px 8px;font-weight:700;color:var(--amber)">${s.symbol}</td>
+            <td style="padding:6px 8px;color:var(--text)">${s.ratio}:1</td>
+            <td style="padding:6px 8px;color:var(--muted)">${s.date}</td>
+            <td style="padding:6px 8px;color:var(--muted)">${adjEntry ? $$(adjEntry) + ' <span style="color:var(--dim);font-size:9px">(was ' + $$(rawEntry) + ')</span>' : '—'}</td>
+            <td style="padding:6px 8px">
+              <button class="act-btn cancel" onclick="removeSplitAdjustment('${s.symbol}','${s.date}')">Remove</button>
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+}
+
+// ── Back button logic ──
+function closeSetup() {
+  document.getElementById('setup-overlay').style.display = 'none';
+}
+
+// ══════════════════════════════════════
 // STARTUP — bulletproof IIFE boot
 // ══════════════════════════════════════
 async function startApp() {
   renderPortDropdown();
   loadDailyLog();
   loadLedger();
+  loadSplitAdjustments();
   await pullDataFromGitHub();
   await refresh();
   scheduleNextRefresh(); // smart: 15s when market open, 5min when closed
