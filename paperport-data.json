@@ -925,6 +925,19 @@
       ],
       "daily_log": [
         {
+          "date": "2026-04-09",
+          "timestamp": "2026-04-09T02:04:46.237Z",
+          "equity": 49725440.5,
+          "cash": 18965631.5,
+          "invested": 30759809.000000004,
+          "day_pl": 866398.3500000031,
+          "day_pl_pct": 1.7732610216551352,
+          "total_return": -274559.5,
+          "total_return_pct": -0.549119,
+          "positions": 18,
+          "source": "auto"
+        },
+        {
           "date": "2026-04-02",
           "timestamp": "2026-04-02T01:30:09.725Z",
           "equity": 49587110.5,
@@ -951,7 +964,7 @@
           "source": "auto"
         }
       ],
-      "last_updated": "2026-04-02T01:30:09.867Z",
+      "last_updated": "2026-04-09T02:04:46.241Z",
       "multiplier": 50,
       "starting_equity": 50000000
     }
