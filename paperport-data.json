@@ -921,9 +921,47 @@
           "notional_display": 1760202.9984000002,
           "status": "filled",
           "source": "alpaca_fill"
+        },
+        {
+          "id": "pp_1776885826390_m5g69",
+          "alpaca_order_id": "b676466c-d447-45ce-9de5-3f7402159d53",
+          "date": "2026-04-22",
+          "created_at": "2026-04-22T19:21:35.258983Z",
+          "submitted_at": "2026-04-22T19:21:35.294192Z",
+          "filled_at": "2026-04-22T19:21:37.404648Z",
+          "canceled_at": null,
+          "expired_at": null,
+          "symbol": "NVDA",
+          "side": "buy",
+          "order_type": "market",
+          "tif": "day",
+          "limit_price": null,
+          "stop_price": null,
+          "trail_percent": null,
+          "qty_ordered": 100,
+          "qty_real": 100,
+          "qty_display": 5000,
+          "fill_price": 201.98,
+          "notional_real": 20198,
+          "notional_display": 1009900,
+          "status": "filled",
+          "source": "alpaca_fill"
         }
       ],
       "daily_log": [
+        {
+          "date": "2026-04-23",
+          "timestamp": "2026-04-23T00:00:51.539Z",
+          "equity": 52473557.49999999,
+          "cash": 17955731.5,
+          "invested": 34517826,
+          "day_pl": 371214.44999999367,
+          "day_pl_pct": 0.7124717014045948,
+          "total_return": 2473557.4999999925,
+          "total_return_pct": 4.947114999999985,
+          "positions": 18,
+          "source": "auto"
+        },
         {
           "date": "2026-04-22",
           "timestamp": "2026-04-22T00:01:04.204Z",
@@ -1133,7 +1171,7 @@
           "source": "auto"
         }
       ],
-      "last_updated": "2026-04-22T00:01:04.457Z",
+      "last_updated": "2026-04-23T00:00:51.779Z",
       "multiplier": 50,
       "starting_equity": 50000000
     }
