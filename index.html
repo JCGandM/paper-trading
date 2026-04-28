@@ -3026,29 +3026,31 @@ function saveSplitAdjustments() {
 //
 // CONFIRMED via live data inspection (BKNG 25:1 split):
 //   Alpaca KEEPS pre-split qty  (7.24 shares — should be 181)
-//   Alpaca shows post-split price ($173 — correct)
-//   So market_value = 7.24 × $173 = $1,256 — OFF BY 25×, SHOULD BE $31,396
+//   Alpaca shows post-split price ($166 — correct)
+//   So market_value = 7.24 × $166 = $1,202 — OFF BY 25×, SHOULD BE $30,046
 //
-// This error flows into EVERYTHING:
-//   market_value     → understated by (mult-1)/mult × true_mv
-//   account.equity   → understated (sum of wrong market_values + cash)
-//   portfolio_value  → understated
-//   cost_basis       → Alpaca stored avg_entry at pre-split price; combined with wrong qty = wrong
-//   unrealized_pl    → wrong_mv - wrong_cost = double-wrong
-//   unrealized_plpc  → wrong_pl / wrong_cost = completely wrong
+// Fields that need correction:
+//   qty            → wrong (pre-split)       → multiply by split ratio
+//   market_value   → wrong (qty × post-split price = pre-split qty × post-split price)
+//                                             → corrQty × currPrice
+//   avg_entry_price → wrong (pre-split)      → divide by split ratio (display only)
+//   unrealized_pl  → wrong (wrong mv - wrong cost)
+//   unrealized_plpc → wrong
 //
-// INTRADAY data is CORRECT because both sides use post-split price:
-//   unrealized_intraday_pl = qty × (current_price - lastday_price)
-//   change_today = (current_price - lastday_price) / lastday_price
-//   These don't involve the stored avg_entry_price, so they're fine.
+// Fields that are ALREADY CORRECT and must NOT be changed:
+//   cost_basis     → the actual dollars you paid — does NOT change in a split
+//                    (a split just changes qty and per-share price, not total $ invested)
+//   current_price  → post-split price ✓
+//   unrealized_intraday_pl / change_today → both sides use post-split price ✓
+//   account.equity / portfolio_value → sum of market_values + cash ✓ (once MV corrected)
 //
-// THE COMPLETE FIX:
-//   corrected_qty          = raw_qty × split_ratio
-//   corrected_market_value = corrected_qty × current_price  (= raw_mv × split_ratio)
-//   corrected_avg_entry    = raw_avg_entry / split_ratio
-//   corrected_cost_basis   = raw_cost_basis / split_ratio   (true dollars invested)
-//   corrected_unrealized_pl = corrected_mv - corrected_cost
-//   corrected_unrealized_plpc = corrected_pl / corrected_cost
+// THE CORRECT FIX:
+//   corrQty           = rawQty × splitRatio
+//   corrMarketValue   = corrQty × currentPrice       (= rawMV × splitRatio)
+//   corrAvgEntry      = rawAvgEntry / splitRatio      (display: per-share price)
+//   corrCostBasis     = rawCostBasis                  ← UNCHANGED — true $ invested
+//   corrUnrealizedPL  = corrMV - rawCostBasis
+//   corrUnrealizedPct = corrPL / rawCostBasis
 
 // Get the cumulative split multiplier for a symbol
 function getSplitMultiplier(symbol) {
@@ -3058,35 +3060,35 @@ function getSplitMultiplier(symbol) {
 }
 
 // Returns a fully corrected copy of a position for display and analytics.
-// Fixes qty, market_value, avg_entry_price, cost_basis, unrealized_pl, unrealized_plpc.
-// Leaves intraday P&L and change_today unchanged (already correct).
 function getSplitAdjustedPosition(p) {
   const mult = getSplitMultiplier(p.symbol);
   if (mult === 1) return { ...p, _splitMult: 1 };
 
   const rawQty     = parseFloat(p.qty);
   const currPrice  = parseFloat(p.current_price);
-  const rawCost    = parseFloat(p.cost_basis);
+  const rawCost    = parseFloat(p.cost_basis);  // true $ invested — DO NOT divide by split
 
-  const corrQty    = rawQty  * mult;                           // actual shares held
-  const corrMV     = corrQty * currPrice;                      // true market value
-  const corrEntry  = parseFloat(p.avg_entry_price) / mult;     // true avg cost per share
-  const corrCost   = rawCost / mult;                           // true dollars originally invested
-  const corrPL     = corrMV - corrCost;                        // actual unrealized gain/loss
-  const corrPLpct  = corrCost !== 0 ? corrPL / corrCost : 0;  // actual % return
+  const corrQty    = rawQty  * mult;                        // actual shares held
+  const corrMV     = corrQty * currPrice;                   // true market value
+  const corrEntry  = parseFloat(p.avg_entry_price) / mult;  // display: adj per-share price
+
+  // Cost basis stays the same — you paid what you paid regardless of the split
+  // P&L = how much the position has gained/lost from what you originally invested
+  const corrPL     = corrMV - rawCost;
+  const corrPLpct  = rawCost !== 0 ? corrPL / rawCost : 0;
 
   return {
     ...p,
-    _splitMult:               mult,
-    _splitAdjusted:           true,
-    _mv_delta:                corrMV - parseFloat(p.market_value), // delta to add back to portfolio totals
-    qty:                      corrQty.toFixed(8),
-    market_value:             corrMV.toFixed(6),
-    avg_entry_price:          corrEntry.toFixed(6),
-    cost_basis:               corrCost.toFixed(6),
-    unrealized_pl:            corrPL.toFixed(6),
-    unrealized_plpc:          corrPLpct.toFixed(8),
-    // Intraday P&L and change_today: left as-is (correct)
+    _splitMult:       mult,
+    _splitAdjusted:   true,
+    _mv_delta:        corrMV - parseFloat(p.market_value), // used by getSplitEquityDelta
+    qty:              corrQty.toFixed(8),
+    market_value:     corrMV.toFixed(6),
+    avg_entry_price:  corrEntry.toFixed(6),
+    cost_basis:       rawCost.toFixed(6),   // unchanged — correct dollar amount paid
+    unrealized_pl:    corrPL.toFixed(6),
+    unrealized_plpc:  corrPLpct.toFixed(8),
+    // intraday P&L and change_today: left unchanged (already correct)
   };
 }
 
