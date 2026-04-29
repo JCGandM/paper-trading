@@ -2305,7 +2305,7 @@ function drawChart(labels, equity, plPcts, spyPcts, qqqPcts) {
 // ══════════════════════════════════════
 // EXCEL EXPORT (full 4-sheet format)
 // ══════════════════════════════════════
-function exportExcel() {
+async function exportExcel() {
   const XL = window.XLSXStyle || window.XLSX;
   if (!XL) { alert('Excel library not loaded yet, please wait a moment and try again.'); return; }
 
@@ -2328,8 +2328,8 @@ function exportExcel() {
     navy2:   '131B28',  // section bg
     blue:    '4D9FFF',  // accent / header text
     white:   'FFFFFF',
-    text:    'D4E2F0',
-    dim:     '5A7494',
+    text:    '111111',  // near-black for data cells (readable on white Excel background)
+    dim:     '444444',  // dark gray for secondary info (times, IDs, status)
     green:   '00D68A',
     red:     'FF4D6A',
     amber:   'F0A500',
@@ -2621,13 +2621,83 @@ function exportExcel() {
   appendSheet(llRows, 'Trade Ledger', [4,11,12,8,6,12,13,12,11,16,14,5,14,14]);
 
   // ════════════════════════════════════════════════════════
-  // SHEET 6 — Returns (Daily + Monthly)
   // ════════════════════════════════════════════════════════
+  // SHEET 6 — Returns (Summary + Daily + Monthly)
+  // ════════════════════════════════════════════════════════
+
+  // Pre-fetch benchmark data before building the sheet
+  const thisYear   = new Date().getFullYear();
+  const ytdStart   = `${thisYear}-01-01`;
+  const today      = new Date().toISOString().split('T')[0];
+  const itdStart   = sortedLog.length ? sortedLog[0].date : ytdStart;
+  const itdIsSameAsYTD = itdStart === ytdStart;
+
+  // Portfolio returns from daily log
+  function portReturnPct(entries) {
+    if (entries.length < 2) return null;
+    const start = entries[0].equity, end = entries[entries.length-1].equity;
+    return start > 0 ? (end - start) / start * 100 : null;
+  }
+  const ytdLogEntries = sortedLog.filter(e => e.date >= ytdStart);
+  const portYTD  = portReturnPct(ytdLogEntries);
+  const portITD  = portReturnPct(sortedLog);
+
+  // Fetch SPY and QQQ for both periods — up to 4 calls, cached
+  let spyYTD = null, qqqYTD = null, spyITD = null, qqqITD = null;
+  try {
+    const results = await Promise.all([
+      fetchBenchmarkReturn('SPY', ytdStart, today),
+      fetchBenchmarkReturn('QQQ', ytdStart, today),
+      itdIsSameAsYTD ? Promise.resolve(null) : fetchBenchmarkReturn('SPY', itdStart, today),
+      itdIsSameAsYTD ? Promise.resolve(null) : fetchBenchmarkReturn('QQQ', itdStart, today),
+    ]);
+    spyYTD = results[0]; qqqYTD = results[1];
+    spyITD = itdIsSameAsYTD ? results[0] : results[2];
+    qqqITD = itdIsSameAsYTD ? results[1] : results[3];
+  } catch(e) { /* benchmark data unavailable — sheet still exports without it */ }
+
+  // Helper: return comparison cell — black label, colored value
+  function retLabelCell(v) {
+    return s(v, { font: { bold: true, color: { rgb: '111111' }, sz: 9 }, fill: { fgColor: { rgb: 'F2F4F6' } }, alignment: { horizontal: 'left' } });
+  }
+  function retValCell(pct) {
+    if (pct == null) return s('—', { font: { color: { rgb: '888888' } }, alignment: { horizontal: 'right' } });
+    return s(pct / 100, { font: { bold: true, color: { rgb: pct >= 0 ? C.green : C.red } }, alignment: { horizontal: 'right' } }, '0.00%');
+  }
+  function retAlphaCell(portPct, benchPct) {
+    if (portPct == null || benchPct == null) return s('—', { font: { color: { rgb: '888888' } }, alignment: { horizontal: 'right' } });
+    const alpha = portPct - benchPct;
+    return s(alpha / 100, { font: { bold: true, color: { rgb: alpha >= 0 ? C.green : C.red } }, alignment: { horizontal: 'right' } }, '+0.00%;-0.00%;0.00%');
+  }
+
+  const itdLabel = itdIsSameAsYTD ? 'Inception-to-Date (= YTD)' : `Inception-to-Date (since ${itdStart})`;
+
   const retRows = [
-    [title('Returns Analysis')],
+    [title('Returns Analysis — PaperPort')],
+    [tx(`Generated: ${now}`)],
     [],
+
+    // ── YTD / ITD Summary ──
+    [sectionHdr('PERFORMANCE SUMMARY')],
+    [],
+    // Header row
+    [tx(''), hdr('My Portfolio'), hdr('SPY'), hdr('QQQ'), hdr('Alpha vs SPY'), hdr('Alpha vs QQQ')],
+    // YTD row
+    [retLabelCell(`YTD (Jan 1, ${thisYear} → today)`),
+     retValCell(portYTD), retValCell(spyYTD), retValCell(qqqYTD),
+     retAlphaCell(portYTD, spyYTD), retAlphaCell(portYTD, qqqYTD)],
+    // ITD row
+    [retLabelCell(itdLabel),
+     retValCell(portITD), retValCell(spyITD), retValCell(qqqITD),
+     retAlphaCell(portITD, spyITD), retAlphaCell(portITD, qqqITD)],
+    [],
+    [tx(`Note: Portfolio returns from ${sortedLog.length} daily log entries. Benchmarks from Alpaca IEX (split-adjusted).`)],
+    [],
+    [],
+
+    // ── Daily Returns ──
     [sectionHdr('DAILY RETURNS')],
-    [hdr('Date'),hdr('Portfolio Value'),hdr('Daily Return ($)'),hdr('Daily Return %'),hdr('Total Return ($)'),hdr('Total Return %')],
+    [hdr('Date'), hdr('Portfolio Value'), hdr('Daily Return ($)'), hdr('Daily Return %'), hdr('Total Return ($)'), hdr('Total Return %')],
     ...sortedLog.map(e => [
       dateCell(e.date + 'T00:00:00'),
       curr(e.equity),
@@ -2638,45 +2708,45 @@ function exportExcel() {
     ]),
     [],
     [],
+
+    // ── Monthly Returns ──
+    [sectionHdr('MONTHLY RETURNS')],
   ];
 
-  // Monthly returns — aggregate by YYYY-MM
-  const monthMap = {};
+  const monthMap2 = {};
   sortedLog.forEach(e => {
-    const mo = e.date.slice(0, 7); // "2026-04"
-    if (!monthMap[mo]) monthMap[mo] = { entries: [] };
-    monthMap[mo].entries.push(e);
+    const mo = e.date.slice(0, 7);
+    if (!monthMap2[mo]) monthMap2[mo] = [];
+    monthMap2[mo].push(e);
   });
+  const months2 = Object.keys(monthMap2).sort();
+  const now_mo  = new Date().toISOString().slice(0, 7);
 
-  const months = Object.keys(monthMap).sort();
-  const hasMonthly = months.length > 0;
-
-  retRows.push([sectionHdr('MONTHLY RETURNS' + (hasMonthly ? '' : ' — (needs at least 1 month of data)'))]);
-  if (hasMonthly) {
-    retRows.push([hdr('Month'),hdr('Start Value'),hdr('End Value'),hdr('Net P&L ($)'),hdr('Net P&L %'),hdr('Trading Days'),hdr('Status')]);
-    months.forEach(mo => {
-      const entries = monthMap[mo].entries;
+  if (!months2.length) {
+    retRows.push([tx('No monthly data yet — log at least a few days to populate this section.')]);
+  } else {
+    retRows.push([hdr('Month'), hdr('Start Value'), hdr('End Value'), hdr('Net P&L ($)'), hdr('Net P&L %'), hdr('Trading Days'), hdr('Status')]);
+    months2.forEach(mo => {
+      const entries  = monthMap2[mo];
       const startVal = entries[0].equity;
-      const endVal   = entries[entries.length - 1].equity;
+      const endVal   = entries[entries.length-1].equity;
       const netPL    = endVal - startVal;
       const netPct   = startVal ? netPL / startVal * 100 : 0;
-      const now_mo   = new Date().toISOString().slice(0, 7);
-      const isPartial = mo === now_mo;
+      const partial  = mo === now_mo;
       const [yr, mnth] = mo.split('-');
-      const moLabel = new Date(parseInt(yr), parseInt(mnth)-1, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' });
+      const moLabel  = new Date(parseInt(yr), parseInt(mnth)-1, 1)
+        .toLocaleString('en-US', { month: 'long', year: 'numeric' });
       retRows.push([
-        tx(moLabel + (isPartial ? ' (partial)' : '')),
-        curr(startVal),
-        curr(endVal),
-        plCell(netPL),
-        plPctCell(netPct),
+        tx(moLabel + (partial ? ' (partial)' : '')),
+        curr(startVal), curr(endVal),
+        plCell(netPL), plPctCell(netPct),
         num(entries.length),
-        tx(isPartial ? 'In Progress' : 'Complete'),
+        tx(partial ? 'In Progress' : 'Complete'),
       ]);
     });
   }
 
-  appendSheet(retRows, 'Returns', [14,16,16,16,13,14,12]);
+  appendSheet(retRows, 'Returns', [32, 16, 13, 13, 15, 15]);
 
   XL.writeFile(wb, `paperport-${dt}.xlsx`);
 }
