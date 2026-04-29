@@ -16,7 +16,7 @@
   --card:     #131b28;
   --border:   #1e2d42;
   --border2:  #253347;
-  --text:     #d4e2f0;
+  --text:     #f0f4f8;
   --muted:    #5a7494;
   --dim:      #3a5270;
   --green:    #00d68a;
@@ -458,6 +458,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
         <button class="tab-btn" onclick="showTab('ledger')" style="color:var(--green)">🔒 Trade Ledger</button>
         <button class="tab-btn" onclick="showTab('batch')" style="color:var(--amber)">⚡ Batch Orders</button>
         <button class="tab-btn" onclick="showTab('analytics')" style="color:var(--green)">📊 Analytics</button>
+        <button class="tab-btn" onclick="showTab('returns')" style="color:var(--amber)">📈 Returns</button>
       </div>
 
       <!-- POSITIONS -->
@@ -770,6 +771,89 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
               <button class="h-btn" style="margin-left:auto" onclick="loadSparklines(true)">↻ Refresh</button>
             </div>
             <div id="sparklines-grid" style="display:flex;flex-wrap:wrap;gap:0"></div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- RETURNS -->
+      <div id="tab-returns" class="tab-panel">
+        <div style="padding:14px 18px;display:flex;flex-direction:column;gap:14px;overflow-y:auto;flex:1">
+
+          <!-- Persistent KPI cards -->
+          <div style="display:flex;gap:10px;flex-wrap:wrap" id="returns-kpi-row">
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:2px;padding:12px 16px;flex:1;min-width:160px">
+              <div style="font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin-bottom:4px">YTD — My Portfolio</div>
+              <div style="font-size:22px;font-weight:700" id="ret-ytd-port">—</div>
+            </div>
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:2px;padding:12px 16px;flex:1;min-width:160px">
+              <div style="font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin-bottom:4px">YTD — SPY</div>
+              <div style="font-size:22px;font-weight:700" id="ret-ytd-spy">—</div>
+            </div>
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:2px;padding:12px 16px;flex:1;min-width:160px">
+              <div style="font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin-bottom:4px">YTD — QQQ</div>
+              <div style="font-size:22px;font-weight:700" id="ret-ytd-qqq">—</div>
+            </div>
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:2px;padding:12px 16px;flex:1;min-width:160px">
+              <div style="font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin-bottom:4px;white-space:nowrap" id="ret-itd-label">Inception-to-Date — Portfolio</div>
+              <div style="font-size:22px;font-weight:700" id="ret-itd-port">—</div>
+            </div>
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:2px;padding:12px 16px;flex:1;min-width:160px">
+              <div style="font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin-bottom:4px">Inception-to-Date — SPY</div>
+              <div style="font-size:22px;font-weight:700" id="ret-itd-spy">—</div>
+            </div>
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:2px;padding:12px 16px;flex:1;min-width:160px">
+              <div style="font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin-bottom:4px">Inception-to-Date — QQQ</div>
+              <div style="font-size:22px;font-weight:700" id="ret-itd-qqq">—</div>
+            </div>
+          </div>
+
+          <!-- Alpha row -->
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:2px;padding:10px 14px;flex:1;min-width:140px">
+              <div style="font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:3px">YTD Alpha vs SPY</div>
+              <div style="font-size:16px;font-weight:700" id="ret-alpha-spy-ytd">—</div>
+            </div>
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:2px;padding:10px 14px;flex:1;min-width:140px">
+              <div style="font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:3px">YTD Alpha vs QQQ</div>
+              <div style="font-size:16px;font-weight:700" id="ret-alpha-qqq-ytd">—</div>
+            </div>
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:2px;padding:10px 14px;flex:1;min-width:140px">
+              <div style="font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:3px">ITD Alpha vs SPY</div>
+              <div style="font-size:16px;font-weight:700" id="ret-alpha-spy-itd">—</div>
+            </div>
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:2px;padding:10px 14px;flex:1;min-width:140px">
+              <div style="font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:3px">ITD Alpha vs QQQ</div>
+              <div style="font-size:16px;font-weight:700" id="ret-alpha-qqq-itd">—</div>
+            </div>
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:2px;padding:10px 14px;flex:1;min-width:140px">
+              <div style="font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:3px">Trading Days Logged</div>
+              <div style="font-size:16px;font-weight:700;color:var(--muted)" id="ret-days">—</div>
+            </div>
+          </div>
+          <div style="font-size:9px;color:var(--dim)" id="ret-note"></div>
+
+          <!-- Daily returns table -->
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:2px">
+            <div style="padding:9px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px">
+              <span style="font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)">Daily Returns</span>
+              <span style="font-size:9px;color:var(--dim)" id="ret-table-note"></span>
+            </div>
+            <table class="dt">
+              <thead><tr>
+                <th>Date</th><th>Portfolio Value</th><th>Daily Return ($)</th><th>Daily Return %</th>
+                <th>Total Return ($)</th><th>Total Return %</th>
+              </tr></thead>
+              <tbody id="ret-daily-body"></tbody>
+            </table>
+          </div>
+
+          <!-- Monthly returns table -->
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:2px">
+            <div style="padding:9px 12px;border-bottom:1px solid var(--border)">
+              <span style="font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)">Monthly Returns</span>
+            </div>
+            <div id="ret-monthly-body" style="padding:0"></div>
           </div>
 
         </div>
@@ -1617,6 +1701,7 @@ function showTab(name) {
   if (name === 'log')      renderDailyLog();
   if (name === 'ledger')   renderLedger();
   if (name === 'analytics') renderAnalytics();
+  if (name === 'returns')   renderReturnsTab();
   if (name === 'batch') {
     if (!batchRows.length) { addBatchRow(); addBatchRow(); addBatchRow(); }
     else renderBatchRows();
@@ -3448,6 +3533,169 @@ function renderSplitsList() {
 // ── Back button logic ──
 function closeSetup() {
   document.getElementById('setup-overlay').style.display = 'none';
+}
+
+// ══════════════════════════════════════
+// RETURNS TAB
+// ══════════════════════════════════════
+
+let returnsCache = null; // { ytd, itd, ts }
+const RETURNS_TTL = 15 * 60 * 1000; // 15 min
+
+async function renderReturnsTab() {
+  const sortedLog = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
+
+  // ── Portfolio returns from daily log ──────────────────
+  const thisYear    = new Date().getFullYear();
+  const ytdStart    = `${thisYear}-01-01`;
+  const itdStart    = sortedLog.length ? sortedLog[0].date : ytdStart;
+  const today       = new Date().toISOString().split('T')[0];
+
+  const ytdEntries  = sortedLog.filter(e => e.date >= ytdStart);
+  const itdEntries  = sortedLog;
+
+  // Compute portfolio return over a set of log entries
+  function portReturn(entries) {
+    if (entries.length < 1) return null;
+    const start = entries[0].equity;
+    const end   = entries[entries.length - 1].equity;
+    return start > 0 ? (end - start) / start * 100 : null;
+  }
+
+  const portYTD = portReturn(ytdEntries);
+  const portITD = portReturn(itdEntries);
+
+  // Update note
+  document.getElementById('ret-note').textContent =
+    `Portfolio data from ${sortedLog.length} daily log entries · Benchmark data from Alpaca IEX · Refreshes every 15 min`;
+  document.getElementById('ret-days').textContent = sortedLog.length;
+  document.getElementById('ret-itd-label').textContent =
+    `Inception-to-Date — Portfolio${itdStart !== ytdStart ? ` (since ${itdStart})` : ''}`;
+
+  // ── Render daily returns table ────────────────────────
+  const dailyBody = document.getElementById('ret-daily-body');
+  if (!sortedLog.length) {
+    dailyBody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--dim)">No daily log entries yet — hit 📌 Log Day to start tracking</td></tr>`;
+  } else {
+    dailyBody.innerHTML = [...sortedLog].reverse().map(e => `<tr>
+      <td class="dim">${fdate(e.date)}</td>
+      <td>${$$(e.equity)}</td>
+      <td class="${cls(e.day_pl)}">${$$(e.day_pl, true)}</td>
+      <td class="${cls(e.day_pl_pct)}">${pp2(e.day_pl_pct)}</td>
+      <td class="${cls(e.total_return)}">${$$(e.total_return, true)}</td>
+      <td class="${cls(e.total_return_pct)}">${pp2(e.total_return_pct)}</td>
+    </tr>`).join('');
+  }
+  document.getElementById('ret-table-note').textContent =
+    sortedLog.length ? `${sortedLog.length} entries` : '';
+
+  // ── Monthly returns ───────────────────────────────────
+  const monthMap = {};
+  sortedLog.forEach(e => {
+    const mo = e.date.slice(0, 7);
+    if (!monthMap[mo]) monthMap[mo] = [];
+    monthMap[mo].push(e);
+  });
+  const months = Object.keys(monthMap).sort().reverse();
+  const monthlyEl = document.getElementById('ret-monthly-body');
+  if (!months.length) {
+    monthlyEl.innerHTML = `<div style="padding:16px;color:var(--dim);font-size:11px">Need at least a few days of log data to show monthly returns.</div>`;
+  } else {
+    const now_mo = new Date().toISOString().slice(0, 7);
+    monthlyEl.innerHTML = `<table class="dt"><thead><tr>
+      <th>Month</th><th>Start Value</th><th>End Value</th>
+      <th>Net P&L ($)</th><th>Net P&L %</th><th>Days</th><th>Status</th>
+    </tr></thead><tbody>` +
+    months.map(mo => {
+      const entries  = monthMap[mo];
+      const startVal = entries[0].equity;
+      const endVal   = entries[entries.length - 1].equity;
+      const netPL    = endVal - startVal;
+      const netPct   = startVal ? netPL / startVal * 100 : 0;
+      const [yr, mnth] = mo.split('-');
+      const label = new Date(parseInt(yr), parseInt(mnth)-1, 1)
+        .toLocaleString('en-US', { month: 'long', year: 'numeric' });
+      const partial = mo === now_mo;
+      return `<tr>
+        <td class="sym">${label}${partial ? ' <span style="font-size:9px;color:var(--amber)">(partial)</span>' : ''}</td>
+        <td>${$$(startVal)}</td>
+        <td>${$$(endVal)}</td>
+        <td class="${cls(netPL)}">${$$(netPL, true)}</td>
+        <td class="${cls(netPct)}">${pp2(netPct)}</td>
+        <td class="dim">${entries.length}</td>
+        <td class="dim">${partial ? 'In Progress' : '✓ Complete'}</td>
+      </tr>`;
+    }).join('') + '</tbody></table>';
+  }
+
+  // ── Benchmark returns (cached, async) ─────────────────
+  setReturnKPI('ret-ytd-port', portYTD);
+  setReturnKPI('ret-itd-port', portITD);
+
+  const now_ts = Date.now();
+  if (returnsCache && (now_ts - returnsCache.ts) < RETURNS_TTL) {
+    applyBenchmarkKPIs(returnsCache, portYTD, portITD);
+    return;
+  }
+
+  // Fetch SPY and QQQ for both periods in parallel — 4 calls total, cached 15 min
+  const [spyYTD, qqqYTD, spyITD, qqqITD] = await Promise.all([
+    fetchBenchmarkReturn('SPY', ytdStart, today),
+    fetchBenchmarkReturn('QQQ', ytdStart, today),
+    itdStart !== ytdStart ? fetchBenchmarkReturn('SPY', itdStart, today) : Promise.resolve(null),
+    itdStart !== ytdStart ? fetchBenchmarkReturn('QQQ', itdStart, today) : Promise.resolve(null),
+  ]);
+
+  returnsCache = {
+    spyYTD,
+    qqqYTD,
+    spyITD: itdStart !== ytdStart ? spyITD : spyYTD,
+    qqqITD: itdStart !== ytdStart ? qqqITD : qqqYTD,
+    ts: Date.now()
+  };
+  applyBenchmarkKPIs(returnsCache, portYTD, portITD);
+}
+
+// Fetch the simple % return for a symbol between two dates (1 API call)
+async function fetchBenchmarkReturn(sym, startDate, endDate) {
+  try {
+    const data = await dapi(
+      `/v2/stocks/${encodeURIComponent(sym)}/bars?timeframe=1Day&start=${startDate}&end=${endDate}&limit=300&feed=iex&adjustment=split`
+    );
+    const bars = data?.bars;
+    if (!bars || bars.length < 2) return null;
+    const base = bars[0].c;
+    const last = bars[bars.length - 1].c;
+    return base > 0 ? (last - base) / base * 100 : null;
+  } catch { return null; }
+}
+
+function setReturnKPI(id, pct) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (pct == null) { el.textContent = '—'; el.style.color = 'var(--muted)'; return; }
+  el.textContent = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+  el.style.color = pct >= 0 ? 'var(--green)' : 'var(--red)';
+}
+
+function setAlphaKPI(id, portPct, benchPct) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (portPct == null || benchPct == null) { el.textContent = '—'; el.style.color = 'var(--muted)'; return; }
+  const alpha = portPct - benchPct;
+  el.textContent = (alpha >= 0 ? '+' : '') + alpha.toFixed(2) + '%';
+  el.style.color = alpha >= 0 ? 'var(--green)' : 'var(--red)';
+}
+
+function applyBenchmarkKPIs(cache, portYTD, portITD) {
+  setReturnKPI('ret-ytd-spy', cache.spyYTD);
+  setReturnKPI('ret-ytd-qqq', cache.qqqYTD);
+  setReturnKPI('ret-itd-spy', cache.spyITD);
+  setReturnKPI('ret-itd-qqq', cache.qqqITD);
+  setAlphaKPI('ret-alpha-spy-ytd', portYTD, cache.spyYTD);
+  setAlphaKPI('ret-alpha-qqq-ytd', portYTD, cache.qqqYTD);
+  setAlphaKPI('ret-alpha-spy-itd', portITD, cache.spyITD);
+  setAlphaKPI('ret-alpha-qqq-itd', portITD, cache.qqqITD);
 }
 
 // ══════════════════════════════════════
