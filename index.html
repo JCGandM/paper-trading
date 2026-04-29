@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PaperPort — Alpaca Paper Trading</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
 
@@ -61,14 +61,15 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 #app.ready { display:flex; }
 
 /* ── HEADER ── */
-#header { height:44px; flex-shrink:0; background:var(--surface); border-bottom:1px solid var(--border); display:flex; align-items:center; }
+#header { height:52px; flex-shrink:0; background:var(--surface); border-bottom:1px solid var(--border); display:flex; align-items:center; }
 .h-logo { width:180px; flex-shrink:0; padding:0 16px; font-size:11px; font-weight:700; letter-spacing:.25em; text-transform:uppercase; color:var(--blue); border-right:1px solid var(--border); height:100%; display:flex; align-items:center; gap:8px; }
 .h-logo::before { content:'◈'; font-size:14px; }
 #acct-bar { display:flex; flex:1; height:100%; }
 .acct-stat { display:flex; flex-direction:column; justify-content:center; padding:0 18px; border-right:1px solid var(--border); cursor:default; }
 .acct-stat:hover { background:rgba(77,159,255,.04); }
-.as-label { font-size:9px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); margin-bottom:2px; }
-.as-val { font-size:13px; font-weight:600; color:var(--text); }
+.as-label { font-size:9px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); margin-bottom:1px; white-space:nowrap; }
+.as-val { font-size:12px; font-weight:600; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.as-sub { font-size:10px; font-weight:500; color:var(--muted); white-space:nowrap; margin-top:1px; }
 .as-val.pos { color:var(--green); }
 .as-val.neg { color:var(--red); }
 #header-actions { padding:0 12px; display:flex; align-items:center; gap:6px; margin-left:auto; }
@@ -341,8 +342,8 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
       <div class="acct-stat"><div class="as-label">Portfolio Value</div><div class="as-val" id="v-pv">—</div></div>
       <div class="acct-stat"><div class="as-label">Cash</div><div class="as-val" id="v-cash">—</div></div>
       <div class="acct-stat"><div class="as-label">Buying Power</div><div class="as-val" id="v-bp">—</div></div>
-      <div class="acct-stat"><div class="as-label">Day P&amp;L</div><div class="as-val" id="v-dpl">—</div></div>
-      <div class="acct-stat"><div class="as-label">Invested</div><div class="as-val" id="v-invested">—</div></div>
+      <div class="acct-stat"><div class="as-label">Day P&amp;L</div><div class="as-val" id="v-dpl">—</div><div class="as-sub" id="v-dpl-pct"></div></div>
+      <div class="acct-stat"><div class="as-label">Invested</div><div class="as-val" id="v-invested">—</div><div class="as-sub" id="v-invested-pct"></div></div>
       <div class="acct-stat"><div class="as-label">Leverage</div><div class="as-val" id="v-leverage">—</div></div>
     </div>
     <div id="header-actions">
@@ -1118,11 +1119,16 @@ function renderAccount() {
   document.getElementById('v-cash').textContent = $$(md(cash));
   document.getElementById('v-bp').textContent   = $$(md(bp));
 
-  const dplEl = document.getElementById('v-dpl');
-  dplEl.textContent = `${dpl>=0?'+':''}${$$(md(dpl))} (${dpl>=0?'+':''}${dplPct.toFixed(2)}%)`;
-  dplEl.className = 'as-val ' + cls(dpl);
+  const dplEl    = document.getElementById('v-dpl');
+  const dplPctEl = document.getElementById('v-dpl-pct');
+  dplEl.textContent    = `${dpl>=0?'+':''}${$$(md(dpl))}`;
+  dplPctEl.textContent = `(${dpl>=0?'+':''}${dplPct.toFixed(2)}%)`;
+  dplEl.className    = 'as-val ' + cls(dpl);
+  dplPctEl.className = 'as-sub ' + cls(dpl);
 
-  document.getElementById('v-invested').textContent = `${$$(md(invested))} (${investedPct}%)`;
+  document.getElementById('v-invested').textContent    = $$(md(invested));
+  const invPctEl = document.getElementById('v-invested-pct');
+  if (invPctEl) { invPctEl.textContent = `(${investedPct}%)`; invPctEl.className = 'as-sub'; }
 
   // Leverage = invested / equity
   const levPct   = eq ? (invested / eq * 100) : 0;
@@ -2215,7 +2221,10 @@ function drawChart(labels, equity, plPcts, spyPcts, qqqPcts) {
 // EXCEL EXPORT (full 4-sheet format)
 // ══════════════════════════════════════
 function exportExcel() {
-  const wb  = XLSX.utils.book_new();
+  const XL = window.XLSXStyle || window.XLSX;
+  if (!XL) { alert('Excel library not loaded yet, please wait a moment and try again.'); return; }
+
+  const wb  = XL.utils.book_new();
   const now = new Date().toLocaleString();
   const dt  = new Date().toISOString().split('T')[0];
   const splitDelta = getSplitEquityDelta();
@@ -2228,127 +2237,368 @@ function exportExcel() {
   const invested = lmv + Math.abs(smv);
   const totalRet = eq - STARTING_EQUITY;
 
-  // ── Sheet 1: Report ──
-  const reportRows = [
-    ['PaperPort — Alpaca Paper Trading Report'],
-    ['Generated:', now],
-    ['Account ID:', account.id || ''],
+  // ── Style constants ──────────────────────────────────────
+  const C = {
+    navy:    '0E1420',  // dark header bg
+    navy2:   '131B28',  // section bg
+    blue:    '4D9FFF',  // accent / header text
+    white:   'FFFFFF',
+    text:    'D4E2F0',
+    dim:     '5A7494',
+    green:   '00D68A',
+    red:     'FF4D6A',
+    amber:   'F0A500',
+  };
+
+  // ── Cell factory helpers ──────────────────────────────────
+  const s = (v, style, z) => {                     // generic styled cell
+    const cell = { v: v ?? '', s: style };
+    if (typeof v === 'number') cell.t = 'n';
+    else if (v instanceof Date) { cell.t = 'n'; cell.v = dateToSerial(v); }
+    else cell.t = 's';
+    if (z) cell.z = z;
+    return cell;
+  };
+
+  // Convert JS Date to Excel serial number
+  function dateToSerial(d) {
+    return (d.getTime() / 86400000) + 25569;
+  }
+  function isoToSerial(iso) {
+    if (!iso) return null;
+    const d = new Date(iso);
+    return isNaN(d) ? null : dateToSerial(d);
+  }
+  function isoToDateSerial(iso) {  // date-only (strip time)
+    if (!iso) return null;
+    const d = new Date(iso.split('T')[0] + 'T00:00:00');
+    return isNaN(d) ? null : dateToSerial(d);
+  }
+
+  // Style presets
+  function title(v) {
+    return s(v, { font: { bold: true, color: { rgb: C.white }, sz: 13 }, fill: { fgColor: { rgb: C.navy } }, alignment: { horizontal: 'left' } });
+  }
+  function hdr(v) {
+    return s(v, { font: { bold: true, color: { rgb: C.blue }, sz: 9 }, fill: { fgColor: { rgb: C.navy } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: { bottom: { style: 'thin', color: { rgb: C.blue } } } });
+  }
+  function sectionHdr(v) {
+    return s(v, { font: { bold: true, color: { rgb: C.amber }, sz: 9 }, fill: { fgColor: { rgb: C.navy2 } }, alignment: { horizontal: 'left' } });
+  }
+  function groupHdr(v) {
+    return s(v, { font: { bold: true, color: { rgb: C.white }, sz: 9 }, fill: { fgColor: { rgb: C.navy2 } }, alignment: { horizontal: 'left' } });
+  }
+  function summaryCell(v, fmt) {
+    return s(v, { font: { bold: true, italic: true, color: { rgb: C.amber } }, fill: { fgColor: { rgb: C.navy2 } }, alignment: { horizontal: 'right' } }, fmt);
+  }
+  function tx(v) { return s(v, { font: { color: { rgb: C.text } } }); }
+  function num(v, fmt) { return s(v, { font: { color: { rgb: C.text } }, alignment: { horizontal: 'right' } }, fmt); }
+  function curr(v) { return num(v, '$#,##0.0'); }
+  function pct(v) { return num(v / 100, '0.00%'); }           // pass as number like 5.23 (%)
+  function plCell(v) {                                          // P&L — colour by sign
+    const col = v >= 0 ? C.green : C.red;
+    return s(v, { font: { color: { rgb: col } }, alignment: { horizontal: 'right' } }, '$#,##0.0');
+  }
+  function plPctCell(v) {
+    const col = v >= 0 ? C.green : C.red;
+    return s(v / 100, { font: { color: { rgb: col } }, alignment: { horizontal: 'right' } }, '0.00%');
+  }
+  function dateCell(iso) {
+    const serial = isoToDateSerial(iso);
+    if (!serial) return tx('—');
+    return s(serial, { font: { color: { rgb: C.text } }, alignment: { horizontal: 'center' } }, 'mm/dd/yyyy');
+  }
+  function timeCell(iso) {
+    if (!iso) return tx('—');
+    const d = new Date(iso);
+    if (isNaN(d)) return tx('—');
+    return s(dateToSerial(d), { font: { color: { rgb: C.dim } }, alignment: { horizontal: 'center' } }, 'hh:mm:ss AM/PM');
+  }
+  function dtCell(iso) {
+    if (!iso) return tx('—');
+    const d = new Date(iso);
+    if (isNaN(d)) return tx('—');
+    return s(dateToSerial(d), { font: { color: { rgb: C.dim } }, alignment: { horizontal: 'center' } }, 'mm/dd/yyyy hh:mm');
+  }
+
+  // Append a worksheet from a row-of-cells array
+  function appendSheet(rows, name, colWidths) {
+    const ws = {};
+    let maxCol = 0;
+    rows.forEach((row, R) => {
+      if (!row) return;
+      row.forEach((cell, C_idx) => {
+        if (cell === null || cell === undefined) return;
+        const addr = XL.utils.encode_cell({ r: R, c: C_idx });
+        ws[addr] = typeof cell === 'object' && cell.v !== undefined ? cell : { v: cell, t: typeof cell === 'number' ? 'n' : 's' };
+        if (C_idx > maxCol) maxCol = C_idx;
+      });
+    });
+    ws['!ref'] = XL.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: rows.length - 1, c: maxCol } });
+    if (colWidths) ws['!cols'] = colWidths.map(w => ({ wch: w }));
+    ws['!rows'] = rows.map(() => ({ hpt: 16 }));
+    XL.utils.book_append_sheet(wb, ws, name);
+  }
+
+  // ════════════════════════════════════════════════════════
+  // SHEET 1 — Report
+  // ════════════════════════════════════════════════════════
+  const repRows = [
+    [title('PaperPort — Alpaca Paper Trading Report')],
+    [tx('Generated:'), tx(now)],
+    [tx('Account ID:'), tx(account.id || '')],
     [],
-    ['ACCOUNT SUMMARY'],
-    ['Metric','Value'],
-    ['Portfolio Value', pv],
-    ['Cash', parseFloat(account.cash||0)],
-    ['Buying Power', parseFloat(account.buying_power||0)],
-    ['Invested (Market Value)', invested],
-    ['% Invested', pv ? parseFloat((invested/pv*100).toFixed(2)) : 0],
-    ['Long Market Value', lmv],
-    ['Short Market Value', smv],
-    ['Day P&L ($)', dpl],
-    ['Day P&L (%)', leq ? parseFloat((dpl/leq*100).toFixed(4)) : 0],
-    ['Total Return ($)', totalRet],
-    ['Total Return (%)', STARTING_EQUITY ? parseFloat((totalRet/STARTING_EQUITY*100).toFixed(4)) : 0],
-    ['Day Trades Used', account.daytrade_count||0],
+    [sectionHdr('ACCOUNT SUMMARY')],
+    [hdr('Metric'), hdr('Value')],
+    [tx('Portfolio Value'),        curr(pv)],
+    [tx('Cash'),                   curr(md(parseFloat(account.cash||0)))],
+    [tx('Buying Power'),           curr(md(parseFloat(account.buying_power||0)))],
+    [tx('Invested (Market Value)'),curr(invested)],
+    [tx('% Invested'),             pct(pv ? invested/pv*100 : 0)],
+    [tx('Day P&L ($)'),            plCell(dpl)],
+    [tx('Day P&L (%)'),            plPctCell(leq ? dpl/leq*100 : 0)],
+    [tx('Total Return ($)'),       plCell(totalRet)],
+    [tx('Total Return (%)'),       plPctCell(STARTING_EQUITY ? totalRet/STARTING_EQUITY*100 : 0)],
+    [tx('Day Trades Used'),        num(account.daytrade_count||0)],
     [],
-    ['OPEN POSITIONS'],
-    ['Symbol','Side','Qty','Avg Entry','Current','Mkt Value','Cost Basis','% of Equity','Unr P&L ($)','Unr P&L (%)','Day P&L ($)','Day P&L (%)'],
+    [sectionHdr('OPEN POSITIONS')],
+    [hdr('Symbol'),hdr('Side'),hdr('Qty'),hdr('Avg Entry'),hdr('Current Price'),
+     hdr('Mkt Value'),hdr('Cost Basis'),hdr('% of Equity'),
+     hdr('Unr P&L ($)'),hdr('Unr P&L %'),hdr('Day P&L ($)'),hdr('Day P&L %')],
     ...positions.map(p => {
-      const ap     = getSplitAdjustedPosition(p);
-      const mv     = md(parseFloat(ap.market_value));
-      const splitM = ap._splitMult || 1;
+      const ap = getSplitAdjustedPosition(p);
+      const mv = md(parseFloat(ap.market_value));
       return [
-        ap.symbol + (splitM !== 1 ? ` (${splitM}:1 adj)` : ''),
-        parseFloat(ap.qty)>=0?'Long':'Short',
-        Math.abs(parseFloat(ap.qty)),
-        parseFloat(ap.avg_entry_price),
-        parseFloat(ap.current_price),
-        mv,
-        md(parseFloat(ap.cost_basis)),
-        pv ? parseFloat((Math.abs(mv)/pv*100).toFixed(2)) : 0,
-        md(parseFloat(ap.unrealized_pl)),
-        parseFloat((parseFloat(ap.unrealized_plpc)*100).toFixed(4)),
-        md(parseFloat(ap.unrealized_intraday_pl)),
-        parseFloat((parseFloat(ap.unrealized_intraday_plpc)*100).toFixed(4))
+        tx(ap.symbol + (ap._splitMult > 1 ? ` (${ap._splitMult}:1)` : '')),
+        tx(parseFloat(ap.qty)>=0?'Long':'Short'),
+        num(Math.abs(parseFloat(ap.qty)), '#,##0.00##'),
+        curr(parseFloat(ap.avg_entry_price)),
+        curr(parseFloat(ap.current_price)),
+        curr(mv),
+        curr(md(parseFloat(ap.cost_basis))),
+        pct(pv ? Math.abs(mv)/pv*100 : 0),
+        plCell(md(parseFloat(ap.unrealized_pl))),
+        plPctCell(parseFloat(ap.unrealized_plpc)*100),
+        plCell(md(parseFloat(ap.unrealized_intraday_pl))),
+        plPctCell(parseFloat(ap.unrealized_intraday_plpc)*100),
       ];
-    })
+    }),
   ];
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(reportRows), 'Report');
+  appendSheet(repRows, 'Report', [28,10,10,11,13,14,14,11,13,10,12,10]);
 
-  // ── Sheet 2: Trade Log ──
-  const allOrders = [...openOrders, ...closedOrders];
-  const tHdr = ['Symbol','Side','Type','Qty Ordered','Qty Filled','Fill Price','Notional','Limit Price','Stop Price','TIF','Status','Submitted','Filled At','Order ID'];
-  const tRows = allOrders.map(o => {
-    const fq = parseFloat(o.filled_qty||0), fp = parseFloat(o.filled_avg_price||0);
-    return [
-      o.symbol, o.side, o.type,
-      parseFloat(o.qty), fq||'', fp||'', fq&&fp?fq*fp:'',
-      o.limit_price?parseFloat(o.limit_price):'',
-      o.stop_price?parseFloat(o.stop_price):'',
-      (o.time_in_force||'').toUpperCase(),
-      o.status, o.submitted_at||'', o.filled_at||'', o.id
-    ];
+  // ════════════════════════════════════════════════════════
+  // SHEET 2 — Trade Log (grouped by ticker)
+  // ════════════════════════════════════════════════════════
+  const allOrders = [...openOrders, ...closedOrders].filter(o => o.filled_qty && parseFloat(o.filled_qty) > 0);
+  // Group by symbol, sorted alphabetically
+  const ordersBySymbol = {};
+  allOrders.forEach(o => { if (!ordersBySymbol[o.symbol]) ordersBySymbol[o.symbol] = []; ordersBySymbol[o.symbol].push(o); });
+  const sortedSymbols = Object.keys(ordersBySymbol).sort();
+
+  const tlRows = [
+    [title('Trade Log — Grouped by Symbol')],
+    [],
+    [hdr('Date'),hdr('Time'),hdr('Symbol'),hdr('Side'),hdr('Type'),
+     hdr('Qty Filled'),hdr('Fill Price'),hdr('Notional'),
+     hdr('Limit $'),hdr('Stop $'),hdr('TIF'),hdr('Status'),hdr('Order ID')],
+  ];
+
+  sortedSymbols.forEach(sym => {
+    const trades = ordersBySymbol[sym].slice().sort((a,b) => (a.submitted_at||'').localeCompare(b.submitted_at||''));
+    let totalBuyQty = 0, totalSellQty = 0, totalBuyNotional = 0, totalSellNotional = 0;
+
+    trades.forEach(o => {
+      const fq = parseFloat(o.filled_qty||0);
+      const fp = parseFloat(o.filled_avg_price||0);
+      const notional = fq * fp;
+      const ts = o.filled_at || o.submitted_at || '';
+      tlRows.push([
+        dateCell(ts), timeCell(ts),
+        tx(o.symbol),
+        tx(o.side.toUpperCase()),
+        tx(o.type),
+        num(fq, '#,##0.00##'),
+        curr(fp),
+        curr(notional),
+        o.limit_price ? curr(parseFloat(o.limit_price)) : tx('—'),
+        o.stop_price  ? curr(parseFloat(o.stop_price))  : tx('—'),
+        tx((o.time_in_force||'').toUpperCase()),
+        tx(o.status),
+        tx(o.id ? o.id.slice(0,8)+'…' : ''),
+      ]);
+      if (o.side === 'buy')  { totalBuyQty += fq; totalBuyNotional += notional; }
+      else                   { totalSellQty += fq; totalSellNotional += notional; }
+    });
+
+    const netQty  = totalBuyQty - totalSellQty;
+    const avgBuy  = totalBuyQty  ? totalBuyNotional  / totalBuyQty  : 0;
+    const avgSell = totalSellQty ? totalSellNotional / totalSellQty : 0;
+    tlRows.push([
+      summaryCell(`${sym} Summary`), tx(''),
+      summaryCell(`Net: ${netQty.toFixed(4)} shares`),
+      summaryCell(`Bought: ${totalBuyQty.toFixed(4)} @ avg ${$$(avgBuy)}`),
+      summaryCell(`Sold: ${totalSellQty.toFixed(4)} @ avg ${avgSell ? $$(avgSell) : '—'}`),
+      summaryCell(totalBuyQty, '#,##0.00##'),
+      summaryCell(avgBuy, '$#,##0.00'),
+      summaryCell(totalBuyNotional, '$#,##0.0'),
+      tx(''), tx(''), tx(''), tx(''), tx(''),
+    ]);
+    tlRows.push([]); // blank row between groups
   });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([tHdr,...tRows]), 'Trade Log');
+  appendSheet(tlRows, 'Trade Log', [11,11,8,6,10,10,10,12,10,10,5,14,11]);
 
-  // ── Sheet 3: P&L ──
-  const pHdr = ['Symbol','Side','Qty','Avg Entry','Current','Mkt Value','Cost Basis','% of Equity','Unr P&L ($)','Unr P&L (%)','Day P&L ($)','Day P&L (%)'];
-  const pRows = positions.map(p => {
-    const ap     = getSplitAdjustedPosition(p);
-    const mv     = md(parseFloat(ap.market_value));
-    const splitM = ap._splitMult || 1;
-    return [
-      ap.symbol + (splitM !== 1 ? ` (${splitM}:1 adj)` : ''),
-      parseFloat(ap.qty)>=0?'Long':'Short',
-      Math.abs(parseFloat(ap.qty)),
-      parseFloat(ap.avg_entry_price),
-      parseFloat(ap.current_price),
-      mv,
-      md(parseFloat(ap.cost_basis)),
-      pv ? parseFloat((Math.abs(mv)/pv*100).toFixed(2)) : 0,
-      md(parseFloat(ap.unrealized_pl)),
-      parseFloat((parseFloat(ap.unrealized_plpc)*100).toFixed(4)),
-      md(parseFloat(ap.unrealized_intraday_pl)),
-      parseFloat((parseFloat(ap.unrealized_intraday_plpc)*100).toFixed(4))
-    ];
+  // ════════════════════════════════════════════════════════
+  // SHEET 3 — P&L
+  // ════════════════════════════════════════════════════════
+  const plRows = [
+    [title('Position P&L (Split-Adjusted)')],
+    [],
+    [hdr('Symbol'),hdr('Side'),hdr('Qty'),hdr('Avg Entry'),hdr('Current Price'),
+     hdr('Mkt Value'),hdr('Cost Basis'),hdr('% of Equity'),
+     hdr('Unr P&L ($)'),hdr('Unr P&L %'),hdr('Day P&L ($)'),hdr('Day P&L %')],
+    ...positions.map(p => {
+      const ap = getSplitAdjustedPosition(p);
+      const mv = md(parseFloat(ap.market_value));
+      return [
+        tx(ap.symbol + (ap._splitMult > 1 ? ` (${ap._splitMult}:1)` : '')),
+        tx(parseFloat(ap.qty)>=0?'Long':'Short'),
+        num(Math.abs(parseFloat(ap.qty)), '#,##0.00##'),
+        curr(parseFloat(ap.avg_entry_price)),
+        curr(parseFloat(ap.current_price)),
+        curr(mv),
+        curr(md(parseFloat(ap.cost_basis))),
+        pct(pv ? Math.abs(mv)/pv*100 : 0),
+        plCell(md(parseFloat(ap.unrealized_pl))),
+        plPctCell(parseFloat(ap.unrealized_plpc)*100),
+        plCell(md(parseFloat(ap.unrealized_intraday_pl))),
+        plPctCell(parseFloat(ap.unrealized_intraday_plpc)*100),
+      ];
+    }),
+  ];
+  appendSheet(plRows, 'P&L', [14,6,10,11,13,14,14,11,13,10,12,10]);
+
+  // ════════════════════════════════════════════════════════
+  // SHEET 4 — Daily Log (with Daily Return column added)
+  // ════════════════════════════════════════════════════════
+  const sortedLog = [...dailyLog].sort((a,b) => a.date.localeCompare(b.date));
+  const dlRows = [
+    [title('Daily Performance Log')],
+    [],
+    [hdr('Date'),hdr('Portfolio Value'),hdr('Cash'),hdr('Invested'),
+     hdr('Day P&L ($)'),hdr('Day P&L %'),hdr('Total Return ($)'),hdr('Total Return %'),
+     hdr('Open Positions'),hdr('Source'),hdr('Daily Return')],
+    ...sortedLog.map(e => [
+      dateCell(e.date + 'T00:00:00'),
+      curr(e.equity),
+      curr(e.cash),
+      curr(e.invested),
+      plCell(parseFloat(e.day_pl.toFixed(2))),
+      plPctCell(parseFloat(e.day_pl_pct.toFixed(4))),
+      plCell(parseFloat(e.total_return.toFixed(2))),
+      plPctCell(parseFloat(e.total_return_pct.toFixed(4))),
+      num(e.positions),
+      tx(e.source),
+      plPctCell(parseFloat(e.day_pl_pct.toFixed(4))), // Daily Return = same as Day P&L %
+    ]),
+  ];
+  appendSheet(dlRows, 'Daily Log', [11,16,14,14,13,11,16,14,14,10,12]);
+
+  // ════════════════════════════════════════════════════════
+  // SHEET 5 — Trade Ledger (invalid date fix: use filled_at/submitted_at)
+  // ════════════════════════════════════════════════════════
+  const llRows = [
+    [title('Trade Ledger')],
+    [],
+    [hdr('#'),hdr('Date'),hdr('Time'),hdr('Symbol'),hdr('Side'),hdr('Order Type'),
+     hdr('Qty (Display)'),hdr('Qty (Real)'),hdr('Fill Price'),
+     hdr('Notional (Display)'),hdr('Notional (Real)'),hdr('TIF'),hdr('Status'),hdr('Order ID')],
+    ...tradeLedger.map((t, i) => {
+      // FIX: use filled_at or submitted_at — t.timestamp doesn't exist on ledger entries
+      const ts = t.filled_at || t.submitted_at || t.created_at || null;
+      return [
+        num(tradeLedger.length - i),
+        dateCell(ts),
+        timeCell(ts),
+        tx(t.symbol),
+        tx((t.side||'').toUpperCase()),
+        tx(t.order_type||''),
+        num(t.qty_display, '#,##0.00##'),
+        num(t.qty_real,    '#,##0.0000'),
+        curr(t.fill_price||0),
+        curr(parseFloat((t.notional_display||0).toFixed(2))),
+        curr(parseFloat((t.notional_real||0).toFixed(2))),
+        tx((t.tif||'').toUpperCase()),
+        tx(t.status||''),
+        tx(t.alpaca_order_id || ''),
+      ];
+    }),
+  ];
+  appendSheet(llRows, 'Trade Ledger', [4,11,12,8,6,12,13,12,11,16,14,5,14,14]);
+
+  // ════════════════════════════════════════════════════════
+  // SHEET 6 — Returns (Daily + Monthly)
+  // ════════════════════════════════════════════════════════
+  const retRows = [
+    [title('Returns Analysis')],
+    [],
+    [sectionHdr('DAILY RETURNS')],
+    [hdr('Date'),hdr('Portfolio Value'),hdr('Daily Return ($)'),hdr('Daily Return %'),hdr('Total Return ($)'),hdr('Total Return %')],
+    ...sortedLog.map(e => [
+      dateCell(e.date + 'T00:00:00'),
+      curr(e.equity),
+      plCell(parseFloat(e.day_pl.toFixed(2))),
+      plPctCell(parseFloat(e.day_pl_pct.toFixed(4))),
+      plCell(parseFloat(e.total_return.toFixed(2))),
+      plPctCell(parseFloat(e.total_return_pct.toFixed(4))),
+    ]),
+    [],
+    [],
+  ];
+
+  // Monthly returns — aggregate by YYYY-MM
+  const monthMap = {};
+  sortedLog.forEach(e => {
+    const mo = e.date.slice(0, 7); // "2026-04"
+    if (!monthMap[mo]) monthMap[mo] = { entries: [] };
+    monthMap[mo].entries.push(e);
   });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([pHdr,...pRows]), 'P&L');
 
-  // ── Sheet 4: Daily Log ──
-  const dlHdr = ['Date','Portfolio Value','Cash','Invested','Day P&L ($)','Day P&L (%)','Total Return ($)','Total Return (%)','Open Positions','Source','Timestamp'];
-  const dlRows = dailyLog.map(e => [
-    e.date, e.equity, e.cash, e.invested,
-    parseFloat(e.day_pl.toFixed(2)),
-    parseFloat(e.day_pl_pct.toFixed(4)),
-    parseFloat(e.total_return.toFixed(2)),
-    parseFloat(e.total_return_pct.toFixed(4)),
-    e.positions, e.source, e.timestamp
-  ]);
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([dlHdr,...dlRows]), 'Daily Log');
+  const months = Object.keys(monthMap).sort();
+  const hasMonthly = months.length > 0;
 
-  // ── Sheet 5: Trade Ledger ──
-  const llHdr = ['#','Date','Time','Symbol','Side','Order Type','Qty (Display)','Qty (Real)','Fill Price','Notional (Display)','Notional (Real)','TIF','Status','Alpaca Order ID'];
-  const llRows = tradeLedger.map((t, i) => {
-    const d = new Date(t.timestamp);
-    return [
-      tradeLedger.length - i, t.date, d.toLocaleTimeString(),
-      t.symbol, t.side, t.order_type,
-      t.qty_display, t.qty_real, t.fill_price,
-      parseFloat(t.notional_display.toFixed(2)),
-      parseFloat(t.notional_real.toFixed(2)),
-      t.tif, t.status, t.alpaca_order_id || ''
-    ];
-  });
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([llHdr,...llRows]), 'Trade Ledger');
+  retRows.push([sectionHdr('MONTHLY RETURNS' + (hasMonthly ? '' : ' — (needs at least 1 month of data)'))]);
+  if (hasMonthly) {
+    retRows.push([hdr('Month'),hdr('Start Value'),hdr('End Value'),hdr('Net P&L ($)'),hdr('Net P&L %'),hdr('Trading Days'),hdr('Status')]);
+    months.forEach(mo => {
+      const entries = monthMap[mo].entries;
+      const startVal = entries[0].equity;
+      const endVal   = entries[entries.length - 1].equity;
+      const netPL    = endVal - startVal;
+      const netPct   = startVal ? netPL / startVal * 100 : 0;
+      const now_mo   = new Date().toISOString().slice(0, 7);
+      const isPartial = mo === now_mo;
+      const [yr, mnth] = mo.split('-');
+      const moLabel = new Date(parseInt(yr), parseInt(mnth)-1, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' });
+      retRows.push([
+        tx(moLabel + (isPartial ? ' (partial)' : '')),
+        curr(startVal),
+        curr(endVal),
+        plCell(netPL),
+        plPctCell(netPct),
+        num(entries.length),
+        tx(isPartial ? 'In Progress' : 'Complete'),
+      ]);
+    });
+  }
 
-  XLSX.writeFile(wb, `paperport-${dt}.xlsx`);
+  appendSheet(retRows, 'Returns', [14,16,16,16,13,14,12]);
+
+  XL.writeFile(wb, `paperport-${dt}.xlsx`);
 }
 
 function exportDailyLogExcel() {
-  const wb = XLSX.utils.book_new();
-  const dt = new Date().toISOString().split('T')[0];
-  const hdr = ['Date','Portfolio Value','Cash','Invested','Day P&L ($)','Day P&L (%)','Total Return ($)','Total Return (%)','Open Positions','Source','Timestamp'];
-  const rows = dailyLog.map(e => [e.date, e.equity, e.cash, e.invested, parseFloat(e.day_pl.toFixed(2)), parseFloat(e.day_pl_pct.toFixed(4)), parseFloat(e.total_return.toFixed(2)), parseFloat(e.total_return_pct.toFixed(4)), e.positions, e.source, e.timestamp]);
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([hdr,...rows]), 'Daily Log');
-  XLSX.writeFile(wb, `paperport-daily-log-${dt}.xlsx`);
+  // Delegate to main export — Daily Log tab is included there
+  exportExcel();
 }
 
 // ══════════════════════════════════════
@@ -2926,32 +3176,53 @@ async function loadSparklines(forceRefresh = false) {
 
   if (cacheValid) {
     renderSparklines(sparkCache.data);
-    noteEl.textContent = `Cached · updated ${Math.round((now - sparkCache.ts) / 60000)}m ago · 1 API call`;
+    noteEl.textContent = `Cached · updated ${Math.round((now - sparkCache.ts) / 60000)}m ago · paginated API calls`;
     return;
   }
 
   if (sparkLoading) return;
   sparkLoading = true;
-  noteEl.textContent = 'Fetching 30-day bars (1 API call)…';
+  noteEl.textContent = 'Fetching 30-day bars…';
   grid.innerHTML = '';
 
   try {
-    const syms = positions.map(p => p.symbol).join(',');
-    // Single multi-symbol call — 1 API call for ALL positions combined
+    const syms      = positions.map(p => p.symbol).join(',');
     const startDate = new Date(Date.now() - 35 * 24 * 3600 * 1000).toISOString().split('T')[0];
-    const data = await dapi(`/v2/stocks/bars?symbols=${encodeURIComponent(syms)}&timeframe=1Day&start=${startDate}&limit=35&feed=iex&adjustment=split`);
+    const baseUrl   = `/v2/stocks/bars?symbols=${syms}&timeframe=1Day&start=${startDate}&limit=35&feed=iex&adjustment=split`;
 
-    if (!data?.bars) throw new Error('No bar data returned');
+    // Follow pagination — Alpaca returns a subset of symbols per page
+    const allBars = {};
+    let pageToken  = null;
+    let pageCount  = 0;
+    const MAX_PAGES = 10; // safety cap
 
-    // Parse: data.bars is { AAPL: [{t,o,h,l,c,v},...], ... }
-    const parsed = {};
-    for (const [sym, bars] of Object.entries(data.bars)) {
-      parsed[sym] = bars.map(b => b.c);
-    }
+    do {
+      const url = baseUrl + (pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : '');
+      const data = await dapi(url);
 
-    sparkCache = { data: parsed, ts: Date.now() };
-    renderSparklines(parsed);
-    noteEl.textContent = `1 batch API call · ${Object.keys(parsed).length} symbols · refreshes every 60 min`;
+      if (data?.bars) {
+        for (const [sym, bars] of Object.entries(data.bars)) {
+          // Concatenate bars across pages — don't overwrite
+          if (allBars[sym]) {
+            allBars[sym] = allBars[sym].concat(bars.map(b => b.c));
+          } else {
+            allBars[sym] = bars.map(b => b.c);
+          }
+        }
+      }
+
+      pageToken = data?.next_page_token || null;
+      pageCount++;
+      if (pageCount > 1) {
+        noteEl.textContent = `Fetching page ${pageCount}… (${Object.keys(allBars).length}/${positions.length} symbols)`;
+      }
+    } while (pageToken && pageCount < MAX_PAGES);
+
+    if (!Object.keys(allBars).length) throw new Error('No bar data returned');
+
+    sparkCache = { data: allBars, ts: Date.now() };
+    renderSparklines(allBars);
+    noteEl.textContent = `${pageCount} API call${pageCount > 1 ? 's' : ''} (paginated) · ${Object.keys(allBars).length} symbols · refreshes every 60 min`;
   } catch(e) {
     noteEl.textContent = `Failed: ${e.message}`;
     grid.innerHTML = `<div style="padding:12px;color:var(--red);font-size:11px">Could not load sparklines: ${e.message}</div>`;
