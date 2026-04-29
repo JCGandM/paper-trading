@@ -3349,7 +3349,7 @@ async function loadSparklines(forceRefresh = false) {
     const allBars = {};
     let pageToken  = null;
     let pageCount  = 0;
-    const MAX_PAGES = 10; // safety cap
+    const MAX_PAGES = 30; // safety cap — 18 symbols need up to ~18+ pages from Alpaca IEX
 
     do {
       const url = baseUrl + (pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : '');
