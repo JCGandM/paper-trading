@@ -1489,17 +1489,19 @@ function updateCapPreview() {
 
   if (!qty || !px || !pv) { el.style.display = 'none'; return; }
 
-  const cost    = qty * px;
-  const capPct  = cost / pv * 100;   // % is same regardless of multiplier
-  const bpLeft  = bp - cost;
-  const barPct  = Math.min(capPct, 100);
+  const cost       = qty * px;                      // real dollars (shares × price)
+  const displayPV  = pv * MULTIPLIER;               // $50M — the capital you think in
+  const capPct     = cost / displayPV * 100;        // cost vs $50M
+  const displayBP  = md(bp);                        // buying power in $50M terms
+  const bpLeft     = displayBP - cost;              // $50M BP minus real cost
+  const barPct     = Math.min(capPct * 10, 100);   // scale bar (small % of $50M)
 
-  document.getElementById('cp-cost').textContent    = $$(md(cost));
-  document.getElementById('cp-pct').textContent     = capPct.toFixed(2) + '%';
-  document.getElementById('cp-bp-left').textContent = bpLeft >= 0 ? $$(md(bpLeft)) : '⚠ Insufficient';
+  document.getElementById('cp-cost').textContent    = $$(cost);          // real $: e.g. $4,624
+  document.getElementById('cp-pct').textContent     = capPct.toFixed(4) + '%'; // vs $50M
+  document.getElementById('cp-bp-left').textContent = bpLeft >= 0 ? $$(bpLeft) : '⚠ Insufficient';
   document.getElementById('cp-bar').style.width     = barPct + '%';
   document.getElementById('cp-bar').style.background =
-    capPct > 25 ? 'var(--red)' : capPct > 10 ? 'var(--amber)' : 'var(--green)';
+    capPct > 2 ? 'var(--red)' : capPct > 0.5 ? 'var(--amber)' : 'var(--green)';
   el.style.display = 'block';
 }
 
@@ -1543,14 +1545,15 @@ async function submitOrder() {
   if (['stop','stop_limit'].includes(type)  && !stop)          return otErr('Stop price required');
   if (type === 'trailing_stop' && !trail)                      return otErr('Trail % required');
 
-  // Leverage check (buy orders only) — qty is actual shares, no division needed
+  // Leverage check — convert to real Alpaca cost
   if (side === 'buy' && lastAskPrice) {
-    const orderCost = parseFloat(qty) * lastAskPrice;
+    const orderCost = (parseFloat(qty) / MULTIPLIER) * lastAskPrice;
     const levErr = checkLeverage(orderCost);
     if (levErr) return otErr(levErr);
   }
 
-  const body = { symbol:sym, qty: parseFloat(qty).toString(), side, type, time_in_force:tif };
+  // Background: divide by MULTIPLIER so Alpaca gets the real share count
+  const body = { symbol:sym, qty: (parseFloat(qty) / MULTIPLIER).toString(), side, type, time_in_force:tif };
   if (limit) body.limit_price   = parseFloat(limit).toFixed(2);
   if (stop)  body.stop_price    = parseFloat(stop).toFixed(2);
   if (trail) body.trail_percent = parseFloat(trail).toFixed(2);
@@ -1610,29 +1613,32 @@ function setATMode(mode) {
 
 function updateATPreview() {
   if (!atSym || !atPrice) return;
-  const shares = parseFloat(document.getElementById('at-shares').value) || 0;
-  const pv     = parseFloat(account.portfolio_value || 0);
-  const pos    = positions.find(p => p.symbol === atSym);
-  // curQty comes from Alpaca — for split stocks use split-adjusted qty
-  const adjPos = getSplitAdjustedPosition(pos || {});
-  const curQty = pos ? Math.abs(parseFloat(adjPos.qty || pos.qty)) : 0;
+  const shares     = parseFloat(document.getElementById('at-shares').value) || 0;
+  const rawPV      = parseFloat(account.portfolio_value || 0);
+  const displayPV  = rawPV * MULTIPLIER;             // $50M
+  const pos        = positions.find(p => p.symbol === atSym);
+  const adjPos     = getSplitAdjustedPosition(pos || {});
+  // curQty = real Alpaca qty (corrected for splits). Convert to display for user-facing math.
+  const curRealQty = pos ? Math.abs(parseFloat(adjPos.qty || pos.qty)) : 0;
 
-  // shares typed = actual shares to send — no MULTIPLIER division
-  const cost   = shares * atPrice;
-  const capChg = pv ? cost / pv * 100 : 0;
-  const newQty = atMode === 'add' ? curQty + shares : curQty - shares;
-  const newMV  = newQty * atPrice;
-  const newPct = pv ? newMV / pv * 100 : 0;
+  // shares = display shares user typed. Background: Alpaca gets shares/MULTIPLIER.
+  const realNewShares = shares / MULTIPLIER;
+  const newRealQty    = atMode === 'add' ? curRealQty + realNewShares : curRealQty - realNewShares;
+  const cost          = shares * atPrice;             // real cost (display shares × price)
+  const capChg        = displayPV ? cost / displayPV * 100 : 0;  // % of $50M
+  const newMV         = newRealQty * atPrice;        // real market value
+  const newPct        = displayPV ? newMV / displayPV * 100 : 0;  // % of $50M
+  const newQtyDisplay = newRealQty * MULTIPLIER;      // show in display share units
 
   const chgColor = atMode === 'add' ? 'var(--green)' : 'var(--amber)';
-  document.getElementById('at-cost').textContent    = $$(md(cost));
+  document.getElementById('at-cost').textContent    = $$(cost);
   document.getElementById('at-cost').style.color    = chgColor;
-  document.getElementById('at-cap-chg').textContent = `${atMode==='add'?'+':'-'}${capChg.toFixed(2)}%`;
+  document.getElementById('at-cap-chg').textContent = `${atMode==='add'?'+':'-'}${capChg.toFixed(4)}%`;
   document.getElementById('at-cap-chg').style.color = chgColor;
-  document.getElementById('at-new-qty').textContent = shares ? newQty.toFixed(4) : '—';
-  document.getElementById('at-new-pct').textContent = shares ? newPct.toFixed(2)+'%' : '—';
+  document.getElementById('at-new-qty').textContent = shares ? newQtyDisplay.toFixed(4) : '—';
+  document.getElementById('at-new-pct').textContent = shares ? newPct.toFixed(4)+'%' : '—';
   const newPctEl = document.getElementById('at-new-pct');
-  newPctEl.style.color = newPct > 20 ? 'var(--amber)' : 'var(--green)';
+  newPctEl.style.color = newPct > 5 ? 'var(--amber)' : 'var(--green)';
 }
 
 async function submitATOrder() {
@@ -1644,7 +1650,7 @@ async function submitATOrder() {
   try {
     const body = {
       symbol: atSym,
-      qty: sharesDisplay.toString(),   // actual shares — no MULTIPLIER division
+      qty: (sharesDisplay / MULTIPLIER).toString(),  // background: real Alpaca shares
       side, type: 'market', time_in_force: 'day'
     };
     await tapi('/v2/orders', { method:'POST', body:JSON.stringify(body) });
@@ -2792,9 +2798,10 @@ function renderBatchRows() {
   document.getElementById('batch-summary').style.display = 'flex';
 
   tbody.innerHTML = batchRows.map(r => {
+    const displayPV = pv * MULTIPLIER;
     const cost    = (r.price && r.shares) ? r.price * parseFloat(r.shares) : null;
-    const capPct  = (cost && pv) ? (cost / pv * 100) : null;
-    const capColor = !capPct ? 'var(--dim)' : capPct > 25 ? 'var(--red)' : capPct > 10 ? 'var(--amber)' : 'var(--green)';
+    const capPct  = (cost && displayPV) ? (cost / displayPV * 100) : null;
+    const capColor = !capPct ? 'var(--dim)' : capPct > 5 ? 'var(--red)' : capPct > 1 ? 'var(--amber)' : 'var(--green)';
 
     const statusHtml = {
       pending:    '<span style="color:var(--dim)">—</span>',
@@ -2830,7 +2837,7 @@ function renderBatchRows() {
           ${['submitting','filled'].includes(r.status) ? 'disabled' : ''}>
       </td>
       <td>${priceDisplay}</td>
-      <td class="batch-cost-cell">${cost ? $$(md(cost)) : '—'}</td>
+      <td class="batch-cost-cell">${cost ? $$(cost) : '—'}</td>
       <td class="batch-pct-cell" style="color:${capColor};font-weight:700">${capPct != null ? capPct.toFixed(2)+'%' : '—'}</td>
       <td>${statusHtml}</td>
       <td>
@@ -2859,15 +2866,16 @@ function updateBatchShares(id, val) {
   r.shares = val;
   // Update just the cost and % cells for this row inline
   const pv = parseFloat(account.portfolio_value || 0);
+  const displayPV2 = pv * MULTIPLIER;
   const cost = (r.price && val) ? r.price * parseFloat(val) : null;
-  const capPct = (cost && pv) ? (cost / pv * 100) : null;
-  const capColor = !capPct ? 'var(--dim)' : capPct > 25 ? 'var(--red)' : capPct > 10 ? 'var(--amber)' : 'var(--green)';
+  const capPct = (cost && displayPV2) ? (cost / displayPV2 * 100) : null;
+  const capColor = !capPct ? 'var(--dim)' : capPct > 5 ? 'var(--red)' : capPct > 1 ? 'var(--amber)' : 'var(--green)';
   const row = document.querySelector(`tr[data-batch-id="${id}"]`);
   if (row) {
     const costCell = row.querySelector('.batch-cost-cell');
     const pctCell  = row.querySelector('.batch-pct-cell');
-    if (costCell) costCell.textContent = cost ? $$(md(cost)).replace(/[^$\d,.]/g,'') : '—';
-    if (costCell) costCell.textContent = cost ? $$(md(cost)) : '—';
+    if (costCell) costCell.textContent = cost ? $$(cost).replace(/[^$\d,.]/g,'') : '—';
+    if (costCell) costCell.textContent = cost ? $$(cost) : '—';
     if (pctCell)  { pctCell.textContent = capPct != null ? capPct.toFixed(2)+'%' : '—'; pctCell.style.color = capColor; }
   }
   updateBatchSummary();
@@ -2915,18 +2923,20 @@ async function batchFetchAllPrices() {
 }
 
 function updateBatchSummary() {
-  const pv   = parseFloat(account.portfolio_value || 0);
-  const bp   = parseFloat(account.buying_power || 0);
-  const valid = batchRows.filter(r => r.price && r.shares && parseFloat(r.shares) > 0);
-  const totalCost = valid.reduce((s, r) => s + r.price * parseFloat(r.shares), 0);
-  const capPct    = pv ? totalCost / pv * 100 : 0;
-  const bpLeft    = bp - totalCost;
+  const rawPV    = parseFloat(account.portfolio_value || 0);
+  const displayPV = rawPV * MULTIPLIER;             // $50M
+  const rawBP    = parseFloat(account.buying_power || 0);
+  const displayBP = rawBP * MULTIPLIER;             // display buying power
+  const valid     = batchRows.filter(r => r.price && r.shares && parseFloat(r.shares) > 0);
+  const totalCost = valid.reduce((s, r) => s + r.price * parseFloat(r.shares), 0); // real $
+  const capPct    = displayPV ? totalCost / displayPV * 100 : 0;  // cost vs $50M
+  const bpLeft    = displayBP - totalCost;          // display BP minus real cost
 
   document.getElementById('bs-count').textContent = batchRows.length;
-  document.getElementById('bs-cost').textContent  = $$(md(totalCost));
-  document.getElementById('bs-pct').textContent   = capPct.toFixed(2) + '%';
-  document.getElementById('bs-pct').style.color   = capPct > 80 ? 'var(--red)' : capPct > 50 ? 'var(--amber)' : 'var(--green)';
-  document.getElementById('bs-bp').textContent    = bpLeft >= 0 ? $$(md(bpLeft)) : '⚠ Over budget';
+  document.getElementById('bs-cost').textContent  = $$(totalCost);   // real $
+  document.getElementById('bs-pct').textContent   = capPct.toFixed(4) + '%';
+  document.getElementById('bs-pct').style.color   = capPct > 5 ? 'var(--red)' : capPct > 2 ? 'var(--amber)' : 'var(--green)';
+  document.getElementById('bs-bp').textContent    = bpLeft >= 0 ? $$(bpLeft) : '⚠ Over budget';
   document.getElementById('bs-bp').style.color    = bpLeft < 0 ? 'var(--red)' : 'var(--text)';
 }
 
@@ -2939,10 +2949,11 @@ async function submitBatch() {
   const toSubmit = batchRows.filter(r => r.symbol && r.shares && parseFloat(r.shares) > 0 && r.status === 'pending');
   if (!toSubmit.length) { errEl.textContent = 'No valid orders to submit.'; errEl.style.display = 'block'; return; }
 
-  // Leverage check across all buy rows — qty is actual shares
+  // Leverage check: convert display shares to real cost (÷ MULTIPLIER) before comparing
+  // against real-scale equity/LMV values inside checkLeverage
   const totalBuyCost = toSubmit
     .filter(r => r.side === 'buy' && r.price)
-    .reduce((s, r) => s + parseFloat(r.shares) * r.price, 0);
+    .reduce((s, r) => s + (parseFloat(r.shares) / MULTIPLIER) * r.price, 0);
   const levErr = checkLeverage(totalBuyCost);
   if (levErr) { errEl.textContent = levErr; errEl.style.display = 'block'; return; }
 
@@ -2955,7 +2966,7 @@ async function submitBatch() {
     r.status = 'submitting';
     renderBatchRows();
     try {
-      const body = { symbol: r.symbol, qty: String(parseFloat(r.shares)), side: r.side, type: orderType, time_in_force: tif };
+      const body = { symbol: r.symbol, qty: (parseFloat(r.shares) / MULTIPLIER).toString(), side: r.side, type: orderType, time_in_force: tif };
       // For limit orders, use fetched price
       if (orderType === 'limit' && r.price) body.limit_price = r.price.toFixed(2);
       await tapi('/v2/orders', { method: 'POST', body: JSON.stringify(body) });
