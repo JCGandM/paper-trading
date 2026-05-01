@@ -1543,14 +1543,14 @@ async function submitOrder() {
   if (['stop','stop_limit'].includes(type)  && !stop)          return otErr('Stop price required');
   if (type === 'trailing_stop' && !trail)                      return otErr('Trail % required');
 
-  // Leverage check (buy orders only)
+  // Leverage check (buy orders only) — qty is actual shares, no division needed
   if (side === 'buy' && lastAskPrice) {
-    const orderCost = (parseFloat(qty) / MULTIPLIER) * lastAskPrice;
+    const orderCost = parseFloat(qty) * lastAskPrice;
     const levErr = checkLeverage(orderCost);
     if (levErr) return otErr(levErr);
   }
 
-  const body = { symbol:sym, qty: (parseFloat(qty) / MULTIPLIER).toString(), side, type, time_in_force:tif };
+  const body = { symbol:sym, qty: parseFloat(qty).toString(), side, type, time_in_force:tif };
   if (limit) body.limit_price   = parseFloat(limit).toFixed(2);
   if (stop)  body.stop_price    = parseFloat(stop).toFixed(2);
   if (trail) body.trail_percent = parseFloat(trail).toFixed(2);
@@ -1613,21 +1613,23 @@ function updateATPreview() {
   const shares = parseFloat(document.getElementById('at-shares').value) || 0;
   const pv     = parseFloat(account.portfolio_value || 0);
   const pos    = positions.find(p => p.symbol === atSym);
-  const curQty = pos ? Math.abs(parseFloat(pos.qty)) : 0;
+  // curQty comes from Alpaca — for split stocks use split-adjusted qty
+  const adjPos = getSplitAdjustedPosition(pos || {});
+  const curQty = pos ? Math.abs(parseFloat(adjPos.qty || pos.qty)) : 0;
 
-  const realShares = shares / MULTIPLIER;  // actual API shares
-  const cost    = realShares * atPrice;
-  const capChg  = pv ? cost / pv * 100 : 0;
-  const newQty  = atMode === 'add' ? curQty + realShares : curQty - realShares;
-  const newMV   = newQty * atPrice;
-  const newPct  = pv ? newMV / pv * 100 : 0;
+  // shares typed = actual shares to send — no MULTIPLIER division
+  const cost   = shares * atPrice;
+  const capChg = pv ? cost / pv * 100 : 0;
+  const newQty = atMode === 'add' ? curQty + shares : curQty - shares;
+  const newMV  = newQty * atPrice;
+  const newPct = pv ? newMV / pv * 100 : 0;
 
   const chgColor = atMode === 'add' ? 'var(--green)' : 'var(--amber)';
   document.getElementById('at-cost').textContent    = $$(md(cost));
   document.getElementById('at-cost').style.color    = chgColor;
   document.getElementById('at-cap-chg').textContent = `${atMode==='add'?'+':'-'}${capChg.toFixed(2)}%`;
   document.getElementById('at-cap-chg').style.color = chgColor;
-  document.getElementById('at-new-qty').textContent = shares ? newQty.toFixed(3) * MULTIPLIER : '—';
+  document.getElementById('at-new-qty').textContent = shares ? newQty.toFixed(4) : '—';
   document.getElementById('at-new-pct').textContent = shares ? newPct.toFixed(2)+'%' : '—';
   const newPctEl = document.getElementById('at-new-pct');
   newPctEl.style.color = newPct > 20 ? 'var(--amber)' : 'var(--green)';
@@ -1642,7 +1644,7 @@ async function submitATOrder() {
   try {
     const body = {
       symbol: atSym,
-      qty: (sharesDisplay / MULTIPLIER).toString(),
+      qty: sharesDisplay.toString(),   // actual shares — no MULTIPLIER division
       side, type: 'market', time_in_force: 'day'
     };
     await tapi('/v2/orders', { method:'POST', body:JSON.stringify(body) });
@@ -2937,10 +2939,10 @@ async function submitBatch() {
   const toSubmit = batchRows.filter(r => r.symbol && r.shares && parseFloat(r.shares) > 0 && r.status === 'pending');
   if (!toSubmit.length) { errEl.textContent = 'No valid orders to submit.'; errEl.style.display = 'block'; return; }
 
-  // Leverage check across all buy rows
+  // Leverage check across all buy rows — qty is actual shares
   const totalBuyCost = toSubmit
     .filter(r => r.side === 'buy' && r.price)
-    .reduce((s, r) => s + (parseFloat(r.shares) / MULTIPLIER) * r.price, 0);
+    .reduce((s, r) => s + parseFloat(r.shares) * r.price, 0);
   const levErr = checkLeverage(totalBuyCost);
   if (levErr) { errEl.textContent = levErr; errEl.style.display = 'block'; return; }
 
@@ -2953,7 +2955,7 @@ async function submitBatch() {
     r.status = 'submitting';
     renderBatchRows();
     try {
-      const body = { symbol: r.symbol, qty: (parseFloat(r.shares) / MULTIPLIER).toString(), side: r.side, type: orderType, time_in_force: tif };
+      const body = { symbol: r.symbol, qty: String(parseFloat(r.shares)), side: r.side, type: orderType, time_in_force: tif };
       // For limit orders, use fetched price
       if (orderType === 'limit' && r.price) body.limit_price = r.price.toFixed(2);
       await tapi('/v2/orders', { method: 'POST', body: JSON.stringify(body) });
