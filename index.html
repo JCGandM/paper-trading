@@ -2100,14 +2100,28 @@ const benchCache = {};
 const BENCH_TTL  = 60 * 60 * 1000; // 1 hour — re-fetch if older
 
 function ytdStartDate() {
-  return new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0];
+  const jan1 = new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0];
+  // If the portfolio started after Jan 1 (account created mid-year),
+  // Alpaca has no data before that — use inception date instead
+  const sortedLog = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
+  const inceptionDate = sortedLog.length ? sortedLog[0].date : null;
+  // Use whichever is later: Jan 1 or inception
+  if (inceptionDate && inceptionDate > jan1) return inceptionDate;
+  return jan1;
+}
+
+// Portfolio inception date — first daily log entry or first trade
+function getInceptionDate() {
+  const sortedLog = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
+  return sortedLog.length ? sortedLog[0].date : today();
 }
 
 // Build Alpaca portfolio/history URL — YTD needs special handling
 function historyUrl(period, tf) {
   if (period === 'YTD') {
     const start = ytdStartDate();
-    return `/v2/account/portfolio/history?start=${start}&timeframe=${tf}&extended_hours=false`;
+    // Alpaca requires RFC3339 format for the start parameter
+    return `/v2/account/portfolio/history?start=${start}T00:00:00Z&timeframe=${tf}&extended_hours=false`;
   }
   return `/v2/account/portfolio/history?period=${period}&timeframe=${tf}&extended_hours=false`;
 }
@@ -2670,11 +2684,10 @@ async function exportExcel() {
   // ════════════════════════════════════════════════════════
 
   // Pre-fetch benchmark data before building the sheet
-  const thisYear   = new Date().getFullYear();
-  const ytdStart   = `${thisYear}-01-01`;
-  const today      = new Date().toISOString().split('T')[0];
-  const itdStart   = sortedLog.length ? sortedLog[0].date : ytdStart;
-  const itdIsSameAsYTD = itdStart === ytdStart;
+  const today_     = new Date().toISOString().split('T')[0];
+  const ytdStart_  = ytdStartDate();  // uses inception date if account started mid-year
+  const itdStart_  = getInceptionDate();
+  const itdIsSameAsYTD = itdStart_ === ytdStart_;
 
   // Portfolio returns from daily log
   function portReturnPct(entries) {
@@ -2682,18 +2695,18 @@ async function exportExcel() {
     const start = entries[0].equity, end = entries[entries.length-1].equity;
     return start > 0 ? (end - start) / start * 100 : null;
   }
-  const ytdLogEntries = sortedLog.filter(e => e.date >= ytdStart);
+  const ytdLogEntries = sortedLog.filter(e => e.date >= ytdStart_);
   const portYTD  = portReturnPct(ytdLogEntries);
   const portITD  = portReturnPct(sortedLog);
 
-  // Fetch SPY and QQQ for both periods — up to 4 calls, cached
+  // Fetch SPY and QQQ — use SAME start dates as portfolio for fair comparison
   let spyYTD = null, qqqYTD = null, spyITD = null, qqqITD = null;
   try {
     const results = await Promise.all([
-      fetchBenchmarkReturn('SPY', ytdStart, today),
-      fetchBenchmarkReturn('QQQ', ytdStart, today),
-      itdIsSameAsYTD ? Promise.resolve(null) : fetchBenchmarkReturn('SPY', itdStart, today),
-      itdIsSameAsYTD ? Promise.resolve(null) : fetchBenchmarkReturn('QQQ', itdStart, today),
+      fetchBenchmarkReturn('SPY', ytdStart_, today_),
+      fetchBenchmarkReturn('QQQ', ytdStart_, today_),
+      itdIsSameAsYTD ? Promise.resolve(null) : fetchBenchmarkReturn('SPY', itdStart_, today_),
+      itdIsSameAsYTD ? Promise.resolve(null) : fetchBenchmarkReturn('QQQ', itdStart_, today_),
     ]);
     spyYTD = results[0]; qqqYTD = results[1];
     spyITD = itdIsSameAsYTD ? results[0] : results[2];
@@ -2714,7 +2727,7 @@ async function exportExcel() {
     return s(alpha / 100, { font: { bold: true, color: { rgb: alpha >= 0 ? C.green : C.red } }, alignment: { horizontal: 'right' } }, '+0.00%;-0.00%;0.00%');
   }
 
-  const itdLabel = itdIsSameAsYTD ? 'Inception-to-Date (= YTD)' : `Inception-to-Date (since ${itdStart})`;
+  const itdLabel = itdIsSameAsYTD ? 'Inception-to-Date (= YTD)' : `Inception-to-Date (since ${itdStart_})`;
 
   const retRows = [
     [title('Returns Analysis — PaperPort')],
@@ -2727,7 +2740,7 @@ async function exportExcel() {
     // Header row
     [tx(''), hdr('My Portfolio'), hdr('SPY'), hdr('QQQ'), hdr('Alpha vs SPY'), hdr('Alpha vs QQQ')],
     // YTD row
-    [retLabelCell(`YTD (Jan 1, ${thisYear} → today)`),
+    [retLabelCell(`YTD (since ${ytdStart_})`),
      retValCell(portYTD), retValCell(spyYTD), retValCell(qqqYTD),
      retAlphaCell(portYTD, spyYTD), retAlphaCell(portYTD, qqqYTD)],
     // ITD row
@@ -3665,8 +3678,8 @@ async function renderReturnsTab() {
 
   // ── Portfolio returns from daily log ──────────────────
   const thisYear    = new Date().getFullYear();
-  const ytdStart    = `${thisYear}-01-01`;
-  const itdStart    = sortedLog.length ? sortedLog[0].date : ytdStart;
+  const ytdStart    = ytdStartDate();    // uses inception date if account started mid-year
+  const itdStart    = getInceptionDate();
   const today       = new Date().toISOString().split('T')[0];
 
   const ytdEntries  = sortedLog.filter(e => e.date >= ytdStart);
@@ -3688,7 +3701,7 @@ async function renderReturnsTab() {
     `Portfolio data from ${sortedLog.length} daily log entries · Benchmark data from Alpaca IEX · Refreshes every 15 min`;
   document.getElementById('ret-days').textContent = sortedLog.length;
   document.getElementById('ret-itd-label').textContent =
-    `Inception-to-Date — Portfolio${itdStart !== ytdStart ? ` (since ${itdStart})` : ''}`;
+    `Inception-to-Date — Portfolio${itdStart !== ytdStart ? ` (since ${itdStart})` : ' (since inception)'}`;
 
   // ── Render daily returns table ────────────────────────
   const dailyBody = document.getElementById('ret-daily-body');
