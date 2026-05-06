@@ -1201,7 +1201,9 @@ function renderAccount() {
 
   document.getElementById('v-pv').textContent   = $$(md(pv));
   document.getElementById('v-cash').textContent = $$(md(cash));
-  document.getElementById('v-bp').textContent   = $$(md(bp));
+  // Show effective BP based on leverage setting, not raw Alpaca margin BP
+  const effectiveBP = getEffectiveBP();
+  document.getElementById('v-bp').textContent   = $$(md(effectiveBP));
 
   const dplEl    = document.getElementById('v-dpl');
   const dplPctEl = document.getElementById('v-dpl-pct');
@@ -1474,7 +1476,6 @@ async function fetchQuote(sym) {
 function updateCapPreview() {
   const qty    = parseFloat(document.getElementById('ot-qty').value) || 0;
   const type   = document.getElementById('ot-type').value;
-  const bp     = parseFloat(account.buying_power || 0);
   const pv     = parseFloat(account.portfolio_value || 0);
   const el     = document.getElementById('cap-preview');
 
@@ -1491,16 +1492,19 @@ function updateCapPreview() {
 
   if (!qty || !px || !pv) { el.style.display = 'none'; return; }
 
+  // Use effective BP (respects leverage setting) instead of raw Alpaca margin BP
+  const effectiveBP = getEffectiveBP();
   const cost       = qty * px;                      // real dollars (shares × price)
-  const displayPV  = pv * MULTIPLIER;               // $50M — the capital you think in
+  const displayPV  = pv * MULTIPLIER;               // $50M
   const capPct     = cost / displayPV * 100;        // cost vs $50M
-  const displayBP  = md(bp);                        // buying power in $50M terms
-  const bpLeft     = displayBP - cost;              // $50M BP minus real cost
-  const barPct     = Math.min(capPct * 10, 100);   // scale bar (small % of $50M)
+  const displayBP  = md(effectiveBP);               // effective BP in $50M terms
+  const bpLeft     = displayBP - cost;              // effective BP minus real cost
+  const barPct     = Math.min(capPct * 10, 100);
 
-  document.getElementById('cp-cost').textContent    = $$(cost);          // real $: e.g. $4,624
-  document.getElementById('cp-pct').textContent     = capPct.toFixed(4) + '%'; // vs $50M
+  document.getElementById('cp-cost').textContent    = $$(cost);
+  document.getElementById('cp-pct').textContent     = capPct.toFixed(4) + '%';
   document.getElementById('cp-bp-left').textContent = bpLeft >= 0 ? $$(bpLeft) : '⚠ Insufficient';
+  document.getElementById('cp-bp-left').style.color = bpLeft < 0 ? 'var(--red)' : '';
   document.getElementById('cp-bar').style.width     = barPct + '%';
   document.getElementById('cp-bar').style.background =
     capPct > 2 ? 'var(--red)' : capPct > 0.5 ? 'var(--amber)' : 'var(--green)';
@@ -1547,11 +1551,11 @@ async function submitOrder() {
   if (['stop','stop_limit'].includes(type)  && !stop)          return otErr('Stop price required');
   if (type === 'trailing_stop' && !trail)                      return otErr('Trail % required');
 
-  // Leverage check — convert to real Alpaca cost
+  // Buying power check (buy orders only) — enforces leverage limit
   if (side === 'buy' && lastAskPrice) {
-    const orderCost = (parseFloat(qty) / MULTIPLIER) * lastAskPrice;
-    const levErr = checkLeverage(orderCost);
-    if (levErr) return otErr(levErr);
+    const orderCost = (parseFloat(qty) / MULTIPLIER) * lastAskPrice; // real cost to Alpaca
+    const bpErr = checkBuyingPower(orderCost);
+    if (bpErr) return otErr(bpErr);
   }
 
   // Background: divide by MULTIPLIER so Alpaca gets the real share count
@@ -1648,6 +1652,14 @@ async function submitATOrder() {
   if (!sharesDisplay || sharesDisplay <= 0) { alert('Enter number of shares'); return; }
   const btn  = document.getElementById('at-submit-btn');
   const side = atMode === 'add' ? 'buy' : 'sell';
+
+  // Buying power check for adds
+  if (side === 'buy' && atPrice) {
+    const realCost = (sharesDisplay / MULTIPLIER) * atPrice;
+    const bpErr = checkBuyingPower(realCost);
+    if (bpErr) { alert(bpErr); return; }
+  }
+
   btn.disabled = true; btn.textContent = 'Submitting…';
   try {
     const body = {
@@ -1669,18 +1681,40 @@ async function submitATOrder() {
 }
 
 // ══════════════════════════════════════
-// LEVERAGE CHECK HELPER
+// EFFECTIVE BUYING POWER & ENFORCEMENT
 // ══════════════════════════════════════
-function checkLeverage(addCost) {
-  if (MAX_LEVERAGE >= 200) return null; // no restriction
-  const eq  = account._correctedEquity || (parseFloat(account.equity || 0) + getSplitEquityDelta());
-  const lmv = parseFloat(account.long_market_value || 0) + getSplitEquityDelta();
-  const smv = Math.abs(parseFloat(account.short_market_value || 0));
-  const currentInvested = lmv + smv;
+// Alpaca always returns buying_power = 2× equity (margin account).
+// MAX_LEVERAGE controls how much of that we actually allow:
+//   100% = cash only — effective BP = cash on hand
+//   150% = 50% margin — effective BP = equity × 1.5 − invested
+//   200% = full Alpaca margin — effective BP = Alpaca's raw buying_power
+//
+// This is the SINGLE SOURCE OF TRUTH for how much you can spend.
+
+function getEffectiveBP() {
+  const eq       = account._correctedEquity || (parseFloat(account.equity || 0) + getSplitEquityDelta());
+  const cash     = parseFloat(account.cash || 0);
+  const lmv      = parseFloat(account.long_market_value || 0) + getSplitEquityDelta();
+  const smv      = Math.abs(parseFloat(account.short_market_value || 0));
+  const invested = lmv + smv;
+  const rawBP    = parseFloat(account.buying_power || 0);
+
+  if (MAX_LEVERAGE >= 200) return rawBP;   // full Alpaca margin
+  if (MAX_LEVERAGE <= 100) return cash;     // cash only — no margin at all
+
+  // Partial margin: max invested = eq × leverage%, so remaining BP = max − current
   const maxInvested = eq * (MAX_LEVERAGE / 100);
-  if (currentInvested + addCost > maxInvested) {
-    const allowed = Math.max(0, maxInvested - currentInvested);
-    return `Leverage limit (${MAX_LEVERAGE}%) reached. Max additional buy: ${$$(md(allowed))}`;
+  return Math.max(0, maxInvested - invested);
+}
+
+// Check if a new buy order of `addCost` (in real Alpaca $) is allowed.
+// Returns an error string if blocked, null if OK.
+function checkBuyingPower(addCost) {
+  const effectiveBP = getEffectiveBP();
+  if (addCost > effectiveBP) {
+    const displayBP = md(effectiveBP);
+    const displayCost = addCost * MULTIPLIER;
+    return `Insufficient buying power. You need ${$$(displayCost)} but only have ${$$(displayBP)} available (leverage: ${MAX_LEVERAGE}%)`;
   }
   return null;
 }
@@ -2447,7 +2481,7 @@ async function exportExcel() {
     [hdr('Metric'), hdr('Value')],
     [tx('Portfolio Value'),        curr(pv)],
     [tx('Cash'),                   curr(md(parseFloat(account.cash||0)))],
-    [tx('Buying Power'),           curr(md(parseFloat(account.buying_power||0)))],
+    [tx('Buying Power'),           curr(md(getEffectiveBP()))],
     [tx('Invested (Market Value)'),curr(invested)],
     [tx('% Invested'),             pct(pv ? invested/pv*100 : 0)],
     [tx('Day P&L ($)'),            plCell(dpl)],
@@ -2927,12 +2961,12 @@ async function batchFetchAllPrices() {
 function updateBatchSummary() {
   const rawPV    = parseFloat(account.portfolio_value || 0);
   const displayPV = rawPV * MULTIPLIER;             // $50M
-  const rawBP    = parseFloat(account.buying_power || 0);
-  const displayBP = rawBP * MULTIPLIER;             // display buying power
+  const effectiveBP = getEffectiveBP();             // respects leverage setting
+  const displayBP = md(effectiveBP);                // effective BP in $50M terms
   const valid     = batchRows.filter(r => r.price && r.shares && parseFloat(r.shares) > 0);
   const totalCost = valid.reduce((s, r) => s + r.price * parseFloat(r.shares), 0); // real $
   const capPct    = displayPV ? totalCost / displayPV * 100 : 0;  // cost vs $50M
-  const bpLeft    = displayBP - totalCost;          // display BP minus real cost
+  const bpLeft    = displayBP - totalCost;          // effective BP minus real cost
 
   document.getElementById('bs-count').textContent = batchRows.length;
   document.getElementById('bs-cost').textContent  = $$(totalCost);   // real $
@@ -2951,13 +2985,12 @@ async function submitBatch() {
   const toSubmit = batchRows.filter(r => r.symbol && r.shares && parseFloat(r.shares) > 0 && r.status === 'pending');
   if (!toSubmit.length) { errEl.textContent = 'No valid orders to submit.'; errEl.style.display = 'block'; return; }
 
-  // Leverage check: convert display shares to real cost (÷ MULTIPLIER) before comparing
-  // against real-scale equity/LMV values inside checkLeverage
+  // Buying power check: convert display shares to real cost before checking
   const totalBuyCost = toSubmit
     .filter(r => r.side === 'buy' && r.price)
     .reduce((s, r) => s + (parseFloat(r.shares) / MULTIPLIER) * r.price, 0);
-  const levErr = checkLeverage(totalBuyCost);
-  if (levErr) { errEl.textContent = levErr; errEl.style.display = 'block'; return; }
+  const bpErr = checkBuyingPower(totalBuyCost);
+  if (bpErr) { errEl.textContent = bpErr; errEl.style.display = 'block'; return; }
 
   const orderType = document.getElementById('batch-type').value;
   const tif = 'day'; // always day — market open will fill
