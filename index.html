@@ -2533,6 +2533,39 @@ async function exportExcel() {
     XL.utils.book_append_sheet(wb, ws, name);
   }
 
+  // ── Pre-fetch benchmark data (used by Report sheet AND Returns sheet) ──
+  const today_       = new Date().toISOString().split('T')[0];
+  const inceptionDt  = getInceptionDate();
+  const ytdStart_    = ytdStartDate();
+  const itdStart_    = inceptionDt;
+  const itdIsSameAsYTD = itdStart_ === ytdStart_;
+
+  function portReturnPct(entries) {
+    if (entries.length < 2) return null;
+    const start = entries[0].equity, end = entries[entries.length-1].equity;
+    return start > 0 ? (end - start) / start * 100 : null;
+  }
+  const ytdLogEntries = sortedLog.filter(e => e.date >= ytdStart_);
+  const portYTD  = portReturnPct(ytdLogEntries);
+  const portITD  = portReturnPct(sortedLog);
+
+  let spyYTD = null, qqqYTD = null, spyITD = null, qqqITD = null;
+  try {
+    const results = await Promise.all([
+      fetchBenchmarkReturn('SPY', ytdStart_, today_),
+      fetchBenchmarkReturn('QQQ', ytdStart_, today_),
+      itdIsSameAsYTD ? Promise.resolve(null) : fetchBenchmarkReturn('SPY', itdStart_, today_),
+      itdIsSameAsYTD ? Promise.resolve(null) : fetchBenchmarkReturn('QQQ', itdStart_, today_),
+    ]);
+    spyYTD = results[0]; qqqYTD = results[1];
+    spyITD = itdIsSameAsYTD ? results[0] : results[2];
+    qqqITD = itdIsSameAsYTD ? results[1] : results[3];
+  } catch(e) { /* benchmark data unavailable — sheets still export without it */ }
+
+  // Use ITD returns for the Report sheet benchmark comparison (same period as portfolio)
+  const spyRetForReport = spyITD != null ? spyITD : spyYTD;
+  const qqqRetForReport = qqqITD != null ? qqqITD : qqqYTD;
+
   // ════════════════════════════════════════════════════════
   // SHEET 1 — Report
   // ════════════════════════════════════════════════════════
@@ -2540,17 +2573,22 @@ async function exportExcel() {
     [title('PaperPort — Alpaca Paper Trading Report')],
     [tx('Generated:'), tx(now)],
     [tx('Account ID:'), tx(account.id || '')],
+    [tx('Portfolio Start Date'), dateCell(inceptionDt + 'T00:00:00')],
     [],
     [sectionHdr('ACCOUNT SUMMARY')],
-    [hdr('Metric'), hdr('Value')],
+    [hdr('Metric'), hdr('Value'), null, hdr('Benchmark'), hdr('Return')],
     [tx('Portfolio Value'),        curr(pv)],
     [tx('Cash'),                   curr(md(parseFloat(account.cash||0)))],
     [tx('Buying Power'),           curr(md(getEffectiveBP()))],
     [tx('Invested (Market Value)'),curr(invested)],
     [tx('% Invested'),             pct(pv ? invested/pv*100 : 0)],
     [tx('Day P&L ($)'),            plCell(dpl)],
-    [tx('Day P&L (%)'),            plPctCell(leq ? dpl/leq*100 : 0)],
-    [tx('Total Return ($)'),       plCell(totalRet)],
+    [tx('Day P&L (%)'),            plPctCell(leq ? dpl/leq*100 : 0), null,
+     hdr(`SPY (since ${inceptionDt})`),
+     spyRetForReport != null ? plPctCell(spyRetForReport) : tx('—')],
+    [tx('Total Return ($)'),       plCell(totalRet), null,
+     hdr(`QQQ (since ${inceptionDt})`),
+     qqqRetForReport != null ? plPctCell(qqqRetForReport) : tx('—')],
     [tx('Total Return (%)'),       plPctCell(STARTING_EQUITY ? totalRet/STARTING_EQUITY*100 : 0)],
     [tx('Day Trades Used'),        num(account.daytrade_count||0)],
     [],
@@ -2743,39 +2781,10 @@ async function exportExcel() {
   appendSheet(llRows, 'Trade Ledger', [4,11,12,8,6,12,13,12,11,16,14,5,14,14]);
 
   // ════════════════════════════════════════════════════════
-  // ════════════════════════════════════════════════════════
   // SHEET 6 — Returns (Summary + Daily + Monthly)
   // ════════════════════════════════════════════════════════
 
-  // Pre-fetch benchmark data before building the sheet
-  const today_     = new Date().toISOString().split('T')[0];
-  const ytdStart_  = ytdStartDate();  // uses inception date if account started mid-year
-  const itdStart_  = getInceptionDate();
-  const itdIsSameAsYTD = itdStart_ === ytdStart_;
-
-  // Portfolio returns from daily log
-  function portReturnPct(entries) {
-    if (entries.length < 2) return null;
-    const start = entries[0].equity, end = entries[entries.length-1].equity;
-    return start > 0 ? (end - start) / start * 100 : null;
-  }
-  const ytdLogEntries = sortedLog.filter(e => e.date >= ytdStart_);
-  const portYTD  = portReturnPct(ytdLogEntries);
-  const portITD  = portReturnPct(sortedLog);
-
-  // Fetch SPY and QQQ — use SAME start dates as portfolio for fair comparison
-  let spyYTD = null, qqqYTD = null, spyITD = null, qqqITD = null;
-  try {
-    const results = await Promise.all([
-      fetchBenchmarkReturn('SPY', ytdStart_, today_),
-      fetchBenchmarkReturn('QQQ', ytdStart_, today_),
-      itdIsSameAsYTD ? Promise.resolve(null) : fetchBenchmarkReturn('SPY', itdStart_, today_),
-      itdIsSameAsYTD ? Promise.resolve(null) : fetchBenchmarkReturn('QQQ', itdStart_, today_),
-    ]);
-    spyYTD = results[0]; qqqYTD = results[1];
-    spyITD = itdIsSameAsYTD ? results[0] : results[2];
-    qqqITD = itdIsSameAsYTD ? results[1] : results[3];
-  } catch(e) { /* benchmark data unavailable — sheet still exports without it */ }
+  // Benchmark data + portYTD/portITD already pre-fetched above
 
   // Helper: return comparison cell — black label, colored value
   function retLabelCell(v) {
