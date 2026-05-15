@@ -148,6 +148,15 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 .act-btn { padding:3px 7px; background:none; border:1px solid var(--border2); color:var(--muted); border-radius:2px; cursor:pointer; font-family:var(--mono); font-size:9px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; transition:all .15s; }
 .act-btn:hover { border-color:var(--red); color:var(--red); }
 .act-btn.cancel:hover { border-color:var(--amber); color:var(--amber); }
+#pos-table tbody tr { cursor:pointer; transition:background .1s; }
+#pos-table tbody tr:hover { background:var(--surface); }
+#pos-table tbody tr.pos-selected { background:var(--blue-bg); border-left:2px solid var(--blue); }
+.pos-meta-input { width:32px; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--mono); font-size:10px; text-align:center; padding:2px; border-radius:2px; }
+.pos-meta-input:focus { border-color:var(--blue); outline:none; }
+.pos-meta-select { width:36px; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--mono); font-size:10px; text-align:center; padding:1px; border-radius:2px; cursor:pointer; -webkit-appearance:none; appearance:none; }
+.pos-meta-select:focus { border-color:var(--blue); outline:none; }
+.pos-target-input { width:52px; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--mono); font-size:10px; text-align:right; padding:2px 4px; border-radius:2px; }
+.pos-target-input:focus { border-color:var(--blue); outline:none; }
 .empty-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; color:var(--dim); font-size:12px; padding:48px; }
 .empty-icon { font-size:28px; opacity:.4; }
 .st-new,.st-accepted,.st-pending_new,.st-held { color:var(--amber); }
@@ -471,20 +480,25 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
           <button class="h-btn" id="sort-day-btn"  onclick="sortPositions('day')">Day P&amp;L</button>
           <span style="margin-left:auto;font-size:9px;color:var(--dim)" id="pos-sort-label"></span>
         </div>
-        <table class="dt">
+        <table class="dt" id="pos-table">
           <thead><tr>
             <th>Symbol</th><th>Side</th><th>Qty</th><th>Avg Entry</th>
-            <th>Current</th><th>Mkt Value</th><th>% of Equity</th>
+            <th>Current</th><th>Mkt Value</th><th>% of Eq</th>
             <th>Unr. P&amp;L</th><th>Unr. %</th>
-            <th>Day P&amp;L</th><th>Day %</th><th>Actions</th>
+            <th>Day P&amp;L</th><th>Day %</th>
+            <th title="Conviction: L=Low M=Med H=High VH=VeryHigh">Conv</th>
+            <th title="Top Idea ranking: 1, 2, or 3">Top</th>
+            <th title="Least Favorite ranking: 1, 2, or 3">Least</th>
+            <th title="Your target fair price">Target $</th>
+            <th title="% upside/downside to your target price">% to FP</th>
           </tr></thead>
-          <tbody id="pos-body"><tr class="loading-row"><td colspan="12">Loading positions…</td></tr></tbody>
+          <tbody id="pos-body"><tr class="loading-row"><td colspan="16">Loading positions…</td></tr></tbody>
         </table>
         <div id="pos-empty" class="empty-state" style="display:none">
           <div class="empty-icon">📊</div><div>No open positions</div>
           <div class="dim">Place an order to get started</div>
         </div>
-        <!-- Add/Trim panel (appears below table) -->
+        <!-- Add/Trim panel (appears below table when a row is clicked) -->
         <div id="addtrim-panel" style="display:none;border-top:1px solid var(--border);padding:14px 18px;background:var(--surface)">
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <span style="font-size:11px;font-weight:700;color:var(--text)" id="at-title">Add / Trim</span>
@@ -504,6 +518,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
             </div>
             <div style="margin-left:auto;display:flex;gap:6px">
               <button id="at-submit-btn" class="submit-btn sbuy" style="padding:6px 16px;width:auto" onclick="submitATOrder()">Submit</button>
+              <button class="act-btn cancel" style="padding:6px 12px" id="at-close-btn" onclick="closeSelectedPosition()">Close Position</button>
               <button class="h-btn" onclick="closeATPanel()">✕</button>
             </div>
           </div>
@@ -940,6 +955,7 @@ function applyPortfolio(id) {
   STARTING_EQUITY = cfg.startingEquity || (1000000 * MULTIPLIER);
   localStorage.setItem('pp_active_portfolio', id);
   loadSplitAdjustments();
+  loadPositionMeta();
 }
 
 function savePortfolioList() {
@@ -1289,27 +1305,61 @@ function renderPositions() {
       ? `<span title="Split-adjusted ${splitMult}:1 — avg entry, cost basis, and P&L corrected" style="font-size:8px;background:var(--amber-bg);color:var(--amber);border:1px solid rgba(240,165,0,.3);border-radius:2px;padding:0 3px;margin-left:3px;cursor:default">${splitMult}:1</span>`
       : '';
 
-    return `<tr>
+    // User-entered position metadata (conviction, target price, etc.)
+    const meta    = getPosMeta(p.symbol);
+    const currPx  = parseFloat(p.current_price);
+    const pctToFP = (meta.targetPrice && currPx)
+      ? ((parseFloat(meta.targetPrice) - currPx) / currPx * 100)
+      : null;
+
+    return `<tr class="${selectedSym === p.symbol ? 'pos-selected' : ''}" onclick="selectPosition('${p.symbol}')">
       <td class="sym">${p.symbol}${splitBadge}</td>
       <td class="${short?'neg':'pos'}">${short?'SHORT':'LONG'}</td>
-      <td>${(Math.abs(qty) * MULTIPLIER).toLocaleString('en-US', {maximumFractionDigits:4})}</td>
+      <td>${(Math.abs(qty) * MULTIPLIER).toLocaleString('en-US', {maximumFractionDigits:2})}</td>
       <td>${$$(adjEntry)}</td>
       <td>${$$(p.current_price)}</td>
-      <td>${$$(md(mv))}</td>
+      <td>${$$(Math.round(md(mv)))}</td>
       <td>
         <div class="alloc-bar-wrap">
           <span style="color:${barColor}">${allocPct.toFixed(1)}%</span>
           <span class="alloc-bar" style="width:${Math.max(barW*1.5,2)}px;background:${barColor}"></span>
         </div>
       </td>
-      <td class="${cls(upl)}">${$$(md(upl),true)}</td>
+      <td class="${cls(upl)}">${$$(Math.round(md(upl)),true)}</td>
       <td class="${cls(uplpc)}">${pp(uplpc)}</td>
-      <td class="${cls(dpl)}">${$$(md(dpl),true)}</td>
+      <td class="${cls(dpl)}">${$$(Math.round(md(dpl)),true)}</td>
       <td class="${cls(dplpc)}">${pp(dplpc)}</td>
-      <td style="white-space:nowrap">
-        <button class="act-btn" style="color:var(--green);border-color:var(--green)" onclick="openATPanel('${p.symbol}','add')">+ Add</button>
-        <button class="act-btn" style="margin-left:3px" onclick="openATPanel('${p.symbol}','trim')">– Trim</button>
-        <button class="act-btn cancel" style="margin-left:3px" onclick="closePos('${p.symbol}')">Close</button>
+      <td onclick="event.stopPropagation()">
+        <select class="pos-meta-select" onchange="setPosMeta('${p.symbol}','conviction',this.value)" title="Conviction">
+          <option value="">—</option>
+          <option value="L" ${meta.conviction==='L'?'selected':''}>L</option>
+          <option value="M" ${meta.conviction==='M'?'selected':''}>M</option>
+          <option value="H" ${meta.conviction==='H'?'selected':''}>H</option>
+          <option value="VH" ${meta.conviction==='VH'?'selected':''}>VH</option>
+        </select>
+      </td>
+      <td onclick="event.stopPropagation()">
+        <select class="pos-meta-select" onchange="setPosMeta('${p.symbol}','topIdea',this.value)" title="Top Idea rank">
+          <option value="">—</option>
+          <option value="1" ${meta.topIdea==='1'?'selected':''}>1</option>
+          <option value="2" ${meta.topIdea==='2'?'selected':''}>2</option>
+          <option value="3" ${meta.topIdea==='3'?'selected':''}>3</option>
+        </select>
+      </td>
+      <td onclick="event.stopPropagation()">
+        <select class="pos-meta-select" onchange="setPosMeta('${p.symbol}','leastFav',this.value)" title="Least Fav rank">
+          <option value="">—</option>
+          <option value="1" ${meta.leastFav==='1'?'selected':''}>1</option>
+          <option value="2" ${meta.leastFav==='2'?'selected':''}>2</option>
+          <option value="3" ${meta.leastFav==='3'?'selected':''}>3</option>
+        </select>
+      </td>
+      <td onclick="event.stopPropagation()">
+        <input class="pos-target-input" type="number" step="any" value="${meta.targetPrice||''}" placeholder="—"
+          onchange="setPosMeta('${p.symbol}','targetPrice',this.value)" title="Target price">
+      </td>
+      <td class="${pctToFP > 0 ? 'pos' : pctToFP < 0 ? 'neg' : 'dim'}" style="font-weight:700">
+        ${pctToFP !== null ? (pctToFP > 0 ? '+' : '') + pctToFP.toFixed(1) + '%' : '—'}
       </td>
     </tr>`;
   }).join('');
@@ -3830,6 +3880,57 @@ function applyBenchmarkKPIs(cache, portYTD, portITD) {
 }
 
 // ══════════════════════════════════════
+// POSITION METADATA (user-entered columns: conviction, top idea, etc.)
+// Stored per-portfolio in localStorage.
+// ══════════════════════════════════════
+
+let positionMetaStore = {}; // { AAPL: { conviction:'H', topIdea:'1', leastFav:'', targetPrice:'320' }, ... }
+let selectedSym       = null; // currently selected position row
+
+function loadPositionMeta() {
+  try { positionMetaStore = JSON.parse(localStorage.getItem(`pp_${activePortId}_pos_meta`) || '{}'); }
+  catch { positionMetaStore = {}; }
+}
+
+function savePositionMeta() {
+  localStorage.setItem(`pp_${activePortId}_pos_meta`, JSON.stringify(positionMetaStore));
+}
+
+function getPosMeta(symbol) {
+  return positionMetaStore[symbol] || { conviction: '', topIdea: '', leastFav: '', targetPrice: '' };
+}
+
+function setPosMeta(symbol, field, value) {
+  if (!positionMetaStore[symbol]) positionMetaStore[symbol] = { conviction: '', topIdea: '', leastFav: '', targetPrice: '' };
+  positionMetaStore[symbol][field] = value;
+  savePositionMeta();
+  // If target price changed, re-render just the % to FP cell instead of full table
+  if (field === 'targetPrice') {
+    const row = document.querySelector(`#pos-table tbody tr.pos-selected, #pos-table tbody tr`);
+    // Just re-render all — simple and safe
+    renderPositions();
+  }
+}
+
+function selectPosition(sym) {
+  if (selectedSym === sym) {
+    // Deselect on second click
+    selectedSym = null;
+    closeATPanel();
+    renderPositions();
+    return;
+  }
+  selectedSym = sym;
+  renderPositions();
+  openATPanel(sym, 'add');
+}
+
+function closeSelectedPosition() {
+  if (!selectedSym) return;
+  closePos(selectedSym);
+}
+
+// ══════════════════════════════════════
 // STARTUP — bulletproof IIFE boot
 // ══════════════════════════════════════
 async function startApp() {
@@ -3837,6 +3938,7 @@ async function startApp() {
   loadDailyLog();
   loadLedger();
   loadSplitAdjustments();
+  loadPositionMeta();
   await pullDataFromGitHub();
   await refresh();
   scheduleNextRefresh(); // smart: 15s when market open, 5min when closed
