@@ -2474,7 +2474,7 @@ async function exportExcel() {
     return s(v, { font: { bold: true, color: { rgb: C.white }, sz: 13 }, fill: { fgColor: { rgb: C.navy } }, alignment: { horizontal: 'left' } });
   }
   function hdr(v) {
-    return s(v, { font: { bold: true, color: { rgb: C.blue }, sz: 9 }, fill: { fgColor: { rgb: C.navy } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: { bottom: { style: 'thin', color: { rgb: C.blue } } } });
+    return s(v, { font: { bold: true, color: { rgb: C.white }, sz: 9 }, fill: { fgColor: { rgb: C.navy } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: { bottom: { style: 'thin', color: { rgb: C.white } } } });
   }
   function sectionHdr(v) {
     return s(v, { font: { bold: true, color: { rgb: C.amber }, sz: 9 }, fill: { fgColor: { rgb: C.navy2 } }, alignment: { horizontal: 'left' } });
@@ -2595,10 +2595,10 @@ async function exportExcel() {
     [tx('Day Trades Used'),        num(account.daytrade_count||0)],
     [],
     [sectionHdr('OPEN POSITIONS')],
-    [hdr('Symbol'),hdr('Side'),hdr('Qty'),hdr('Avg Entry'),hdr('Current Price'),
-     hdr('Mkt Value'),hdr('Cost Basis'),hdr('% of Equity'),
-     hdr('Unr P&L ($)'),hdr('Unr P&L %'),hdr('Day P&L ($)'),hdr('Day P&L %'),
-     hdr('Conv.'),hdr('Top Ideas'),hdr('Least Fav'),hdr('Target $'),hdr('% to FP')],
+    [hdr('Ticker'),hdr('Conv'),hdr('Top'),hdr('Least'),
+     hdr('Qty'),hdr('Avg Entry'),hdr('Current'),hdr('Target $'),hdr('% to FP'),
+     hdr('Mkt Value'),hdr('Cost Basis'),hdr('% of Eq'),
+     hdr('Unr P&L'),hdr('Unr %'),hdr('Day %')],
     ...positions.map(p => {
       const ap = getSplitAdjustedPosition(p);
       const mv = md(parseFloat(ap.market_value));
@@ -2606,32 +2606,28 @@ async function exportExcel() {
       const currPx = parseFloat(ap.current_price);
       const pctFP = (meta.targetPrice && currPx)
         ? ((parseFloat(meta.targetPrice) - currPx) / currPx * 100) : null;
-      // Top Ideas: 1→XXX, 2→XX, 3→X, else blank
       const topStr = meta.topIdea === '1' ? 'XXX' : meta.topIdea === '2' ? 'XX' : meta.topIdea === '3' ? 'X' : '';
-      // Least Fav: 1→***, 2→**, 3→*, else blank
       const leastStr = meta.leastFav === '1' ? '***' : meta.leastFav === '2' ? '**' : meta.leastFav === '3' ? '*' : '';
       return [
         tx(ap.symbol + (ap._splitMult > 1 ? ` (${ap._splitMult}:1)` : '')),
-        tx(parseFloat(ap.qty)>=0?'Long':'Short'),
-        num(Math.abs(parseFloat(ap.qty)) * MULTIPLIER, '#,##0.00##'),
-        curr(parseFloat(ap.avg_entry_price)),
-        curr(parseFloat(ap.current_price)),
-        curr(mv),
-        curr(md(parseFloat(ap.cost_basis))),
-        pct(pv ? Math.abs(mv)/pv*100 : 0),
-        plCell(md(parseFloat(ap.unrealized_pl))),
-        plPctCell(parseFloat(ap.unrealized_plpc)*100),
-        plCell(md(parseFloat(ap.unrealized_intraday_pl))),
-        plPctCell(parseFloat(ap.unrealized_intraday_plpc)*100),
         tx(meta.conviction || ''),
         tx(topStr),
         tx(leastStr),
-        meta.targetPrice ? curr(parseFloat(meta.targetPrice)) : tx(''),
-        pctFP != null ? plPctCell(pctFP) : tx(''),
+        num(Math.round(Math.abs(parseFloat(ap.qty)) * MULTIPLIER), '#,##0'),
+        curr(parseFloat(ap.avg_entry_price)),
+        curr(parseFloat(ap.current_price)),
+        meta.targetPrice ? num(Math.round(parseFloat(meta.targetPrice)), '$#,##0') : tx(''),
+        pctFP != null ? num(Math.round(pctFP), '0"%"') : tx(''),
+        num(Math.round(mv), '$#,##0'),
+        num(Math.round(md(parseFloat(ap.cost_basis))), '$#,##0'),
+        pct(pv ? Math.abs(mv)/pv*100 : 0),
+        s(Math.round(md(parseFloat(ap.unrealized_pl))), { font: { color: { rgb: parseFloat(ap.unrealized_pl) >= 0 ? C.green : C.red } }, alignment: { horizontal: 'right' } }, '$#,##0'),
+        plPctCell(parseFloat(ap.unrealized_plpc)*100),
+        plPctCell(parseFloat(ap.unrealized_intraday_plpc)*100),
       ];
     }),
   ];
-  appendSheet(repRows, 'Report', [28,10,10,11,13,14,14,11,13,10,12,10,6,10,10,10,8]);
+  appendSheet(repRows, 'Report', [14,6,6,6,8,11,11,10,8,12,12,8,12,8,8]);
 
   // ════════════════════════════════════════════════════════
   // SHEET 2 — Trade Log (grouped by ticker)
