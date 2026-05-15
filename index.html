@@ -2557,10 +2557,19 @@ async function exportExcel() {
     [sectionHdr('OPEN POSITIONS')],
     [hdr('Symbol'),hdr('Side'),hdr('Qty'),hdr('Avg Entry'),hdr('Current Price'),
      hdr('Mkt Value'),hdr('Cost Basis'),hdr('% of Equity'),
-     hdr('Unr P&L ($)'),hdr('Unr P&L %'),hdr('Day P&L ($)'),hdr('Day P&L %')],
+     hdr('Unr P&L ($)'),hdr('Unr P&L %'),hdr('Day P&L ($)'),hdr('Day P&L %'),
+     hdr('Conv.'),hdr('Top Ideas'),hdr('Least Fav'),hdr('Target $'),hdr('% to FP')],
     ...positions.map(p => {
       const ap = getSplitAdjustedPosition(p);
       const mv = md(parseFloat(ap.market_value));
+      const meta = getPosMeta(ap.symbol);
+      const currPx = parseFloat(ap.current_price);
+      const pctFP = (meta.targetPrice && currPx)
+        ? ((parseFloat(meta.targetPrice) - currPx) / currPx * 100) : null;
+      // Top Ideas: 1→XXX, 2→XX, 3→X, else blank
+      const topStr = meta.topIdea === '1' ? 'XXX' : meta.topIdea === '2' ? 'XX' : meta.topIdea === '3' ? 'X' : '';
+      // Least Fav: 1→***, 2→**, 3→*, else blank
+      const leastStr = meta.leastFav === '1' ? '***' : meta.leastFav === '2' ? '**' : meta.leastFav === '3' ? '*' : '';
       return [
         tx(ap.symbol + (ap._splitMult > 1 ? ` (${ap._splitMult}:1)` : '')),
         tx(parseFloat(ap.qty)>=0?'Long':'Short'),
@@ -2574,10 +2583,15 @@ async function exportExcel() {
         plPctCell(parseFloat(ap.unrealized_plpc)*100),
         plCell(md(parseFloat(ap.unrealized_intraday_pl))),
         plPctCell(parseFloat(ap.unrealized_intraday_plpc)*100),
+        tx(meta.conviction || ''),
+        tx(topStr),
+        tx(leastStr),
+        meta.targetPrice ? curr(parseFloat(meta.targetPrice)) : tx(''),
+        pctFP != null ? plPctCell(pctFP) : tx(''),
       ];
     }),
   ];
-  appendSheet(repRows, 'Report', [28,10,10,11,13,14,14,11,13,10,12,10]);
+  appendSheet(repRows, 'Report', [28,10,10,11,13,14,14,11,13,10,12,10,6,10,10,10,8]);
 
   // ════════════════════════════════════════════════════════
   // SHEET 2 — Trade Log (grouped by ticker)
