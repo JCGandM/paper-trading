@@ -2535,6 +2535,7 @@ async function exportExcel() {
   }
 
   // ── Pre-fetch benchmark data (used by Report sheet AND Returns sheet) ──
+  const sortedLog  = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
   const today_       = new Date().toISOString().split('T')[0];
   const inceptionDt  = getInceptionDate();
   const ytdStart_    = ytdStartDate();
@@ -2726,7 +2727,6 @@ async function exportExcel() {
   // ════════════════════════════════════════════════════════
   // SHEET 4 — Daily Log (with Daily Return column added)
   // ════════════════════════════════════════════════════════
-  const sortedLog = [...dailyLog].sort((a,b) => a.date.localeCompare(b.date));
   const dlRows = [
     [title('Daily Performance Log')],
     [],
