@@ -2627,6 +2627,46 @@ async function exportExcel() {
       ];
     }),
   ];
+
+  // ── Compliance section — appended 3 rows below Open Positions ──
+  // Compute all parameters using split-adjusted values
+  const longExposurePct = pv > 0 ? invested / pv * 100 : 0;
+  const cashPct         = pv > 0 ? parseFloat(account.cash || 0) / pv * 100 : 0;
+  const posCount        = positions.length;
+  const adjMVPcts       = positions.map(p => {
+    const ap = getSplitAdjustedPosition(p);
+    return pv > 0 ? Math.abs(parseFloat(ap.market_value)) / pv * 100 : 0;
+  });
+  const largestPosPct  = adjMVPcts.length > 0 ? Math.max(...adjMVPcts) : 0;
+  const smallestPosPct = adjMVPcts.length > 0 ? Math.min(...adjMVPcts) : 0;
+
+  // Compliance rules — { param, requirement, currentValue, pass }
+  const compRules = [
+    { param: 'Long Exposure',       req: '70% – 100%', val: longExposurePct.toFixed(1) + '%', pass: longExposurePct >= 70 && longExposurePct <= 100 },
+    { param: 'Cash',                req: '0% – 30%',   val: cashPct.toFixed(1) + '%',         pass: cashPct >= 0 && cashPct <= 30 },
+    { param: 'Number of Positions', req: '15 – 30',    val: posCount.toString(),              pass: posCount >= 15 && posCount <= 30 },
+    { param: 'Largest Position',    req: '≤ 15%',      val: largestPosPct.toFixed(1) + '%',  pass: largestPosPct <= 15 },
+    { param: 'Smallest Position',   req: '≥ 1%',       val: smallestPosPct.toFixed(1) + '%', pass: smallestPosPct >= 1 },
+  ];
+  const overallPass = compRules.every(r => r.pass);
+
+  // Status cell helper
+  const passCell = v => s(v, { font: { bold: true, color: { rgb: C.green } }, alignment: { horizontal: 'center' } });
+  const failCell = v => s(v, { font: { bold: true, color: { rgb: C.red   } }, alignment: { horizontal: 'center' } });
+  const overallCell = overallPass
+    ? s('✓ ALL PASS', { font: { bold: true, color: { rgb: C.green }, sz: 11 }, alignment: { horizontal: 'left' } })
+    : s('⚠ COMPLIANCE ISSUES FOUND', { font: { bold: true, color: { rgb: C.red }, sz: 11 }, alignment: { horizontal: 'left' } });
+
+  repRows.push([], [], []);   // 3 blank rows after Open Positions
+  repRows.push([sectionHdr('REQUIRED PARAMETERS — COMPLIANCE CHECK'), null, null, null, null, overallCell]);
+  repRows.push([hdr('Parameter'), hdr('Requirement'), hdr('Current Value'), hdr('Status')]);
+  compRules.forEach(r => repRows.push([
+    s(r.param, { font: { bold: true, color: { rgb: '111111' } }, fill: { fgColor: { rgb: 'F2F4F6' } } }),
+    tx(r.req),
+    s(r.val, { font: { color: { rgb: '111111' } }, alignment: { horizontal: 'center' } }),
+    r.pass ? passCell('PASS') : failCell('FAIL'),
+  ]));
+
   appendSheet(repRows, 'Report', [14,6,6,6,8,11,11,10,8,12,12,8,12,8,8]);
 
   // ════════════════════════════════════════════════════════
