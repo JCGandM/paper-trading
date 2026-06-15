@@ -890,7 +890,13 @@
 
   <!-- Shares -->
   <div class="ot-field">
-    <div class="ot-label">Shares</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <div class="ot-label" style="margin-bottom:0">Shares</div>
+      <button id="mob-max-btn" onclick="setMobileMaxShares()"
+        style="background:rgba(240,165,0,.1);border:1px solid rgba(240,165,0,.4);color:var(--amber);border-radius:20px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer">
+        Max
+      </button>
+    </div>
     <input id="ot-shares" class="ot-input" type="number" placeholder="0"
            inputmode="decimal" min="0" step="any" oninput="updateCapPreview()">
   </div>
@@ -1316,6 +1322,29 @@ function setSide(side) {
   const btn = document.getElementById('ot-submit');
   btn.textContent = side === 'buy' ? 'Place Buy Order' : 'Place Sell Order';
   btn.classList.toggle('sell-mode', side === 'sell');
+  // Max only makes sense for buys
+  const maxBtn = document.getElementById('mob-max-btn');
+  if (maxBtn) maxBtn.style.display = side === 'buy' ? '' : 'none';
+  updateCapPreview();
+}
+
+function setMobileMaxShares() {
+  const px = getPx();
+  if (!px || px <= 0) { showOtError('Type a symbol above first to get a price'); return; }
+  const rawEq    = cachedEquity + getSplitEquityDelta(cachedPositions);
+  const mockAcct = { equity: rawEq,
+                     cash:              parseFloat(localStorage.__lastCash  || rawEq),
+                     buying_power:      parseFloat(localStorage.__lastRawBP || rawEq * 2),
+                     long_market_value: parseFloat(localStorage.__lastLMV   || 0),
+                     short_market_value: '0' };
+  const effBP = getEffectiveBP(mockAcct, getSplitEquityDelta(cachedPositions));
+  if (effBP <= 0) { showOtError('No buying power available'); return; }
+  // 0.5% buffer so we stay out of negative cash
+  const maxRealShares    = (effBP * 0.995) / px;
+  const maxDisplayShares = Math.floor(maxRealShares * MULTIPLIER);
+  if (maxDisplayShares <= 0) { showOtError('Insufficient buying power for 1 share'); return; }
+  document.getElementById('ot-shares').value = maxDisplayShares;
+  clearError();
   updateCapPreview();
 }
 
@@ -1407,18 +1436,22 @@ async function submitOrder() {
   if (!sym)              { showOtError('Enter a symbol'); return; }
   if (!shares || shares <= 0) { showOtError('Enter number of shares'); return; }
 
-  // Buying power check for buys
+  // Buying power check — ALWAYS enforced for buys, never skipped
   if (otSide === 'buy') {
-    const px      = getPx();
-    const cost    = px ? (shares * px) / MULTIPLIER : 0;  // real Alpaca cost
-    const rawEq   = cachedEquity + getSplitEquityDelta(cachedPositions);
+    const px = getPx();
+    if (!px || px <= 0) { showOtError('Fetch a quote first — type the symbol above'); return; }
+    // 0.5% slippage buffer so market fills can't push you negative
+    const realCost = (shares / MULTIPLIER) * px * 1.005;
+    const rawEq    = cachedEquity + getSplitEquityDelta(cachedPositions);
     const mockAcct = { equity: rawEq, cash: parseFloat(localStorage.__lastCash || rawEq),
                        buying_power: parseFloat(localStorage.__lastRawBP || rawEq * 2),
                        long_market_value: parseFloat(localStorage.__lastLMV || 0),
                        short_market_value: '0' };
     const effBP = getEffectiveBP(mockAcct, getSplitEquityDelta(cachedPositions));
-    if (cost > effBP) {
-      showOtError('Insufficient buying power'); return;
+    if (realCost > effBP) {
+      const shortfall = (realCost - effBP) * MULTIPLIER;
+      showOtError(`Insufficient buying power — short by ${fmt$(shortfall)}`);
+      return;
     }
   }
 
