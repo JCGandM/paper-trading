@@ -403,7 +403,10 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
         </div>
 
         <div class="ot-field">
-          <label class="ot-lbl">Shares</label>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+            <label class="ot-lbl" style="margin-bottom:0">Shares</label>
+            <button class="h-btn" id="max-shares-btn" onclick="setMaxShares()" style="font-size:9px;padding:2px 8px;color:var(--amber);border-color:var(--amber)">Max</button>
+          </div>
           <input id="ot-qty" class="ot-in" type="number" min="0.001" step="any" placeholder="0" oninput="updateCapPreview()">
         </div>
 
@@ -1586,6 +1589,9 @@ function setSide(s) {
   btn.textContent = `SUBMIT ${s.toUpperCase()} ORDER`;
   btn.className = 'submit-btn ' + (s==='buy'?'sbuy':'ssell');
   document.getElementById('ot-err').style.display = 'none';
+  // Max button only meaningful for buys
+  const maxBtn = document.getElementById('max-shares-btn');
+  if (maxBtn) maxBtn.style.display = s === 'buy' ? '' : 'none';
 }
 
 function onTypeChange() {
@@ -1597,6 +1603,26 @@ function onTypeChange() {
 }
 
 function otErr(msg) { const el = document.getElementById('ot-err'); el.textContent = msg; el.style.display = 'block'; }
+function otOk()     { const el = document.getElementById('ot-err'); el.textContent = ''; el.style.display = 'none'; }
+
+// Max Shares — fills the qty input with the maximum you can buy given current buying power
+function setMaxShares() {
+  const side = document.querySelector('.side-btn.on')?.classList.contains('buy') || true;
+  if (!side) return; // Max only applies to buys
+  // Best available price
+  const limitVal = parseFloat(document.getElementById('ot-limit')?.value) || 0;
+  const px = limitVal > 0 ? limitVal : lastAskPrice;
+  if (!px || px <= 0) { otErr('Enter the symbol above first to get a live price'); return; }
+  const effBP = getEffectiveBP(); // raw Alpaca cash
+  if (effBP <= 0) { otErr('No buying power available'); return; }
+  // Max real shares = buying power / price (with 0.5% buffer so we stay out of negative)
+  const maxRealShares  = (effBP * 0.995) / px;
+  const maxDisplayShares = Math.floor(maxRealShares * MULTIPLIER);
+  if (maxDisplayShares <= 0) { otErr('Insufficient buying power to purchase even 1 share'); return; }
+  document.getElementById('ot-qty').value = maxDisplayShares;
+  otOk();
+  updateCapPreview();
+}
 
 async function submitOrder() {
   const sym   = document.getElementById('ot-sym').value.trim().toUpperCase();
@@ -1615,9 +1641,13 @@ async function submitOrder() {
   if (['stop','stop_limit'].includes(type)  && !stop)          return otErr('Stop price required');
   if (type === 'trailing_stop' && !trail)                      return otErr('Trail % required');
 
-  // Buying power check (buy orders only) — enforces leverage limit
-  if (side === 'buy' && lastAskPrice) {
-    const orderCost = (parseFloat(qty) / MULTIPLIER) * lastAskPrice; // real cost to Alpaca
+  // Buying power check — ALWAYS enforced for buy orders, never skipped
+  if (side === 'buy') {
+    // Use best available price: limit price > last ask price > stop price
+    const checkPx = (limit ? parseFloat(limit) : 0) || lastAskPrice || (stop ? parseFloat(stop) : 0);
+    if (!checkPx) return otErr('Cannot verify buying power — fetch a live quote first by entering the symbol above');
+    // Add 0.5% slippage buffer so market fills can't push you negative
+    const orderCost = (parseFloat(qty) / MULTIPLIER) * checkPx * 1.005;
     const bpErr = checkBuyingPower(orderCost);
     if (bpErr) return otErr(bpErr);
   }
