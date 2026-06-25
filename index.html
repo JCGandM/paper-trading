@@ -791,6 +791,40 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
             <div id="sparklines-grid" style="display:flex;flex-wrap:wrap;gap:0"></div>
           </div>
 
+          <!-- P&L summary cards (realized / unrealized / total) -->
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px">
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:2px;padding:12px 14px">
+              <div style="font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:4px">Realized P&amp;L</div>
+              <div style="font-size:18px;font-weight:700" id="pnl-realized-total">—</div>
+              <div style="font-size:10px;color:var(--muted)" id="pnl-realized-sub">closed trades</div>
+            </div>
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:2px;padding:12px 14px">
+              <div style="font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:4px">Unrealized P&amp;L</div>
+              <div style="font-size:18px;font-weight:700" id="pnl-unrealized-total">—</div>
+              <div style="font-size:10px;color:var(--muted)" id="pnl-unrealized-sub">open positions</div>
+            </div>
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:2px;padding:12px 14px">
+              <div style="font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:4px">Total P&amp;L</div>
+              <div style="font-size:18px;font-weight:700" id="pnl-total-total">—</div>
+              <div style="font-size:10px;color:var(--muted)">realized + unrealized</div>
+            </div>
+          </div>
+
+          <!-- P&L by Name table -->
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:2px;margin-bottom:8px">
+            <div style="padding:10px 12px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)">
+              <span style="font-size:9px;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--dim)">P&amp;L by Name</span>
+              <span style="font-size:9px;color:var(--dim)" id="pnl-name-note">Computing from fill history…</span>
+              <button class="h-btn" style="margin-left:auto" onclick="loadRealizedPnL(true)">↻ Refresh</button>
+            </div>
+            <table class="dt" style="width:100%">
+              <thead><tr>
+                <th>Ticker</th><th>Status</th><th>Realized P&amp;L</th><th>Unrealized P&amp;L</th><th>Total P&amp;L</th>
+              </tr></thead>
+              <tbody id="pnl-name-body"><tr><td colspan="5" style="text-align:center;color:var(--dim);padding:16px">Open the Analytics tab to compute</td></tr></tbody>
+            </table>
+          </div>
+
           <!-- Compliance panel -->
           <div style="background:var(--card);border:1px solid var(--border);border-radius:2px">
             <div style="padding:10px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px">
@@ -1624,6 +1658,39 @@ function setMaxShares() {
   updateCapPreview();
 }
 
+// Fetch a fresh ask price right now (not the cached one) for accurate cost checks.
+// Returns { ask, source } or null. Prefers ask > last trade > day close > prev close.
+async function getFreshAsk(sym) {
+  try {
+    const snap = await dapi(`/v2/stocks/${encodeURIComponent(sym)}/snapshot?feed=iex`);
+    if (!snap) return null;
+    const ask  = snap.latestQuote?.ap;
+    const last = snap.latestTrade?.p;
+    const dayC = snap.dailyBar?.c;
+    const prev = snap.prevDailyBar?.c;
+    const px = ask || last || dayC || prev || null;
+    if (!px) return null;
+    return { px, hasLiveAsk: !!ask };
+  } catch { return null; }
+}
+
+// Sum the real-dollar cost of all OPEN buy orders so stacked orders can't collectively overdraw.
+async function getPendingBuyCost() {
+  try {
+    const open = await tapi('/v2/orders?status=open&limit=100');
+    return (open || [])
+      .filter(o => o.side === 'buy')
+      .reduce((sum, o) => {
+        const q  = parseFloat(o.qty || 0);
+        const px = parseFloat(o.limit_price || o.notional || 0) ||
+                   (o.notional ? parseFloat(o.notional) : 0);
+        // For limit orders use limit price; otherwise we can't know exact, use a conservative estimate
+        const refPx = parseFloat(o.limit_price) || 0;
+        return sum + (refPx ? q * refPx : 0);
+      }, 0);
+  } catch { return 0; }
+}
+
 async function submitOrder() {
   const sym   = document.getElementById('ot-sym').value.trim().toUpperCase();
   const qty   = document.getElementById('ot-qty').value;
@@ -1641,28 +1708,85 @@ async function submitOrder() {
   if (['stop','stop_limit'].includes(type)  && !stop)          return otErr('Stop price required');
   if (type === 'trailing_stop' && !trail)                      return otErr('Trail % required');
 
-  // Buying power check — ALWAYS enforced for buy orders, never skipped
-  if (side === 'buy') {
-    // Use best available price: limit price > last ask price > stop price
-    const checkPx = (limit ? parseFloat(limit) : 0) || lastAskPrice || (stop ? parseFloat(stop) : 0);
-    if (!checkPx) return otErr('Cannot verify buying power — fetch a live quote first by entering the symbol above');
-    // Add 0.5% slippage buffer so market fills can't push you negative
-    const orderCost = (parseFloat(qty) / MULTIPLIER) * checkPx * 1.005;
-    const bpErr = checkBuyingPower(orderCost);
-    if (bpErr) return otErr(bpErr);
-  }
+  const realQty = parseFloat(qty) / MULTIPLIER;  // shares actually sent to Alpaca
+  const btn = document.getElementById('submit-btn');
+  btn.disabled = true; btn.textContent = 'Checking price…';
 
-  // Background: divide by MULTIPLIER so Alpaca gets the real share count
-  const body = { symbol:sym, qty: (parseFloat(qty) / MULTIPLIER).toString(), side, type, time_in_force:tif };
+  // Build the order body
+  const body = { symbol:sym, qty: realQty.toString(), side, type, time_in_force:tif };
   if (limit) body.limit_price   = parseFloat(limit).toFixed(2);
   if (stop)  body.stop_price    = parseFloat(stop).toFixed(2);
   if (trail) body.trail_percent = parseFloat(trail).toFixed(2);
 
-  const btn = document.getElementById('submit-btn');
-  btn.disabled = true; btn.textContent = 'Submitting…';
+  // ── BUY-SIDE PROTECTION ──────────────────────────────────────────────
+  // The goal: never let a buy push cash negative. Three layers:
+  //   1) Re-fetch a FRESH quote right now (cached price may be stale)
+  //   2) Convert a market buy into a MARKETABLE LIMIT order with a hard price
+  //      ceiling — Alpaca will not fill above the limit, capping the spend.
+  //   3) Account for cash already committed to other OPEN buy orders.
+  if (side === 'buy') {
+    try {
+      // Layer 1: fresh price
+      let refPx;
+      if (['limit','stop_limit'].includes(type)) {
+        refPx = parseFloat(limit);
+      } else {
+        const fresh = await getFreshAsk(sym);
+        if (!fresh) { btn.disabled = false; setSide(side); return otErr('Could not get a live price for ' + sym + '. Try again in a moment.'); }
+        refPx = fresh.px;
+      }
+
+      // Layer 3: subtract cash already tied up in open buy orders
+      const pendingCost = await getPendingBuyCost();
+      const effBP       = getEffectiveBP() - pendingCost;
+
+      if (effBP <= 0) { btn.disabled = false; setSide(side); return otErr('No buying power available (other open orders are using it)'); }
+
+      // Layer 2: for market/stop orders, set a price ceiling 0.3% above the ask
+      // and send as a (stop-)limit so the fill is hard-capped. The limit is still
+      // marketable (above ask) so it fills immediately like a market order.
+      let ceilingPx = refPx;
+      if (type === 'market') {
+        ceilingPx = refPx * 1.003;
+        body.type = 'limit';
+        body.limit_price = ceilingPx.toFixed(2);
+      } else if (type === 'stop') {
+        ceilingPx = refPx * 1.003;
+        body.type = 'stop_limit';
+        body.limit_price = (parseFloat(stop) * 1.003).toFixed(2);
+        ceilingPx = parseFloat(stop) * 1.003;
+      }
+
+      // Worst-case cost = qty × ceiling price. This is the MOST you could ever spend.
+      const worstCaseCost = realQty * ceilingPx;
+
+      // Layer: if worst-case exceeds available BP, shave shares to fit
+      if (worstCaseCost > effBP) {
+        const affordableRealShares  = Math.floor((effBP / ceilingPx) * MULTIPLIER) / MULTIPLIER;
+        const affordableDisplay     = Math.floor(affordableRealShares * MULTIPLIER);
+        if (affordableDisplay <= 0) {
+          btn.disabled = false; setSide(side);
+          return otErr(`Insufficient buying power. Need ${$$(md(worstCaseCost))}, have ${$$(md(effBP))} available.`);
+        }
+        // Auto-reduce the order to what fits, and tell the user why
+        body.qty = (affordableRealShares).toString();
+        const reducedFrom = qty;
+        document.getElementById('ot-qty').value = affordableDisplay;
+        otErr(`Reduced from ${Number(reducedFrom).toLocaleString()} to ${affordableDisplay.toLocaleString()} shares — full size would exceed available cash (${$$(md(effBP))}).`);
+        errEl.style.color = 'var(--amber)';
+        // continue with the reduced quantity (do not return)
+      }
+    } catch(e) {
+      btn.disabled = false; setSide(side);
+      return otErr('Price check failed: ' + e.message);
+    }
+  }
+
+  btn.textContent = 'Submitting…';
   try {
     await tapi('/v2/orders', { method:'POST', body:JSON.stringify(body) });
     ['ot-qty','ot-limit','ot-stop','ot-trail'].forEach(id => document.getElementById(id).value = '');
+    errEl.style.color = ''; // reset from any amber warning
     updateCapPreview();
     await refresh();
     showTab('open');
@@ -1746,21 +1870,52 @@ async function submitATOrder() {
   if (!sharesDisplay || sharesDisplay <= 0) { alert('Enter number of shares'); return; }
   const btn  = document.getElementById('at-submit-btn');
   const side = atMode === 'add' ? 'buy' : 'sell';
+  const realQty = sharesDisplay / MULTIPLIER;
 
-  // Buying power check for adds
-  if (side === 'buy' && atPrice) {
-    const realCost = (sharesDisplay / MULTIPLIER) * atPrice;
-    const bpErr = checkBuyingPower(realCost);
-    if (bpErr) { alert(bpErr); return; }
+  const body = {
+    symbol: atSym,
+    qty: realQty.toString(),
+    side, type: 'market', time_in_force: 'day'
+  };
+
+  btn.disabled = true; btn.textContent = 'Checking price…';
+
+  // Buy-side protection: fresh quote, marketable-limit ceiling, pending-order aware, auto-shave
+  if (side === 'buy') {
+    try {
+      const fresh = await getFreshAsk(atSym);
+      if (!fresh) { btn.disabled = false; setATMode(atMode); alert('Could not get a live price for ' + atSym + '. Try again in a moment.'); return; }
+      const ceilingPx   = fresh.px * 1.003;          // 0.3% ceiling
+      const pendingCost = await getPendingBuyCost();
+      const effBP       = getEffectiveBP() - pendingCost;
+      if (effBP <= 0) { btn.disabled = false; setATMode(atMode); alert('No buying power available (other open orders are using it)'); return; }
+
+      // Convert to marketable limit so fill is hard-capped
+      body.type = 'limit';
+      body.limit_price = ceilingPx.toFixed(2);
+
+      let useRealQty = realQty;
+      const worstCase = realQty * ceilingPx;
+      if (worstCase > effBP) {
+        useRealQty = Math.floor((effBP / ceilingPx) * MULTIPLIER) / MULTIPLIER;
+        const affordableDisplay = Math.floor(useRealQty * MULTIPLIER);
+        if (affordableDisplay <= 0) {
+          btn.disabled = false; setATMode(atMode);
+          alert(`Insufficient buying power. Need ${$$(md(worstCase))}, have ${$$(md(effBP))} available.`);
+          return;
+        }
+        body.qty = useRealQty.toString();
+        document.getElementById('at-shares').value = affordableDisplay;
+        alert(`Reduced to ${affordableDisplay.toLocaleString()} shares — full size would exceed available cash (${$$(md(effBP))}).`);
+      }
+    } catch(e) {
+      btn.disabled = false; setATMode(atMode);
+      alert('Price check failed: ' + e.message); return;
+    }
   }
 
-  btn.disabled = true; btn.textContent = 'Submitting…';
+  btn.textContent = 'Submitting…';
   try {
-    const body = {
-      symbol: atSym,
-      qty: (sharesDisplay / MULTIPLIER).toString(),  // background: real Alpaca shares
-      side, type: 'market', time_in_force: 'day'
-    };
     await tapi('/v2/orders', { method:'POST', body:JSON.stringify(body) });
     closeATPanel();
     await refresh();
@@ -1768,7 +1923,6 @@ async function submitATOrder() {
   } catch(e) {
     alert('Order failed: ' + e.message);
   } finally {
-    // Always re-enable the button regardless of success or failure
     btn.disabled = false;
     setATMode(atMode);
   }
@@ -1838,7 +1992,7 @@ function showTab(name) {
   if (name === 'chart')    loadChart(lastPeriod);
   if (name === 'log')      renderDailyLog();
   if (name === 'ledger')   renderLedger();
-  if (name === 'analytics') renderAnalytics();
+  if (name === 'analytics') { renderAnalytics(); loadRealizedPnL(); }
   if (name === 'returns')   renderReturnsTab();
   if (name === 'batch') {
     if (!batchRows.length) { addBatchRow(); addBatchRow(); addBatchRow(); }
@@ -2966,6 +3120,88 @@ async function exportExcel() {
 
   appendSheet(retRows, 'Returns', [32, 16, 13, 13, 15, 15]);
 
+  // ════════════════════════════════════════════════════════
+  // SHEET 7 — P&L by Name (realized + unrealized + total)
+  // ════════════════════════════════════════════════════════
+  try {
+    // Fetch all fills and compute realized P&L via FIFO
+    const fills = [];
+    let pageToken = null;
+    for (let i = 0; i < 20; i++) {
+      let url = '/v2/account/activities/FILL?page_size=100&direction=asc';
+      if (pageToken) url += '&page_token=' + encodeURIComponent(pageToken);
+      const batch = await tapi(url);
+      if (!batch || !batch.length) break;
+      fills.push(...batch);
+      if (batch.length < 100) break;
+      pageToken = batch[batch.length - 1].id;
+    }
+
+    // FIFO realized P&L
+    const lots = {}, realized = {};
+    const sortedFills = [...fills].sort((a, b) => new Date(a.transaction_time) - new Date(b.transaction_time));
+    for (const f of sortedFills) {
+      const sym = f.symbol, q = Math.abs(parseFloat(f.qty)), px = parseFloat(f.price);
+      if (!sym || !q || !px) continue;
+      if (!lots[sym]) lots[sym] = [];
+      if (realized[sym] == null) realized[sym] = 0;
+      if (f.side === 'buy') { lots[sym].push({ qty: q, price: px }); }
+      else if (f.side === 'sell') {
+        let rem = q;
+        while (rem > 0 && lots[sym].length > 0) {
+          const lot = lots[sym][0];
+          const m = Math.min(rem, lot.qty);
+          realized[sym] += m * (px - lot.price);
+          lot.qty -= m; rem -= m;
+          if (lot.qty <= 1e-9) lots[sym].shift();
+        }
+        if (rem > 0) lots[sym].push({ qty: -rem, price: px });
+      }
+    }
+
+    // Unrealized from open positions
+    const openMap = {};
+    for (const p of positions) {
+      const ap = getSplitAdjustedPosition(p);
+      openMap[p.symbol] = parseFloat(ap.unrealized_pl);
+    }
+
+    const allSyms = [...new Set([...Object.keys(realized), ...Object.keys(openMap)])];
+    const pnlRows2 = allSyms.map(sym => {
+      const r = realized[sym] || 0;
+      const u = openMap[sym] || 0;
+      const isOpen = openMap[sym] != null;
+      return { sym, r, u, total: r + u, isOpen };
+    }).sort((a, b) => b.total - a.total);
+
+    let sumR = 0, sumU = 0;
+    pnlRows2.forEach(x => { sumR += x.r; sumU += x.u; });
+
+    const pnlSheet = [
+      [title('Profit & Loss by Name')],
+      [tx('Generated:'), tx(now)],
+      [tx(`Computed from ${fills.length} fills using FIFO lot matching`)],
+      [],
+      [sectionHdr('TOTALS')],
+      [hdr('Realized P&L'), hdr('Unrealized P&L'), hdr('Total P&L')],
+      [plCell(md(sumR)), plCell(md(sumU)), plCell(md(sumR + sumU))],
+      [],
+      [sectionHdr('BY TICKER')],
+      [hdr('Ticker'), hdr('Status'), hdr('Realized P&L'), hdr('Unrealized P&L'), hdr('Total P&L')],
+      ...pnlRows2.map(r => [
+        tx(r.sym),
+        tx(r.isOpen ? 'Open' : 'Closed'),
+        plCell(md(r.r)),
+        r.isOpen ? plCell(md(r.u)) : tx('—'),
+        plCell(md(r.total)),
+      ]),
+    ];
+    appendSheet(pnlSheet, 'P&L by Name', [14, 9, 15, 15, 15]);
+  } catch(e) {
+    // If fills can't be fetched, skip this sheet rather than failing the whole export
+    console.error('P&L by Name sheet skipped:', e.message);
+  }
+
   XL.writeFile(wb, `paperport-${dt}.xlsx`);
   } catch(e) {
     console.error('Excel export error:', e);
@@ -4046,6 +4282,143 @@ function selectPosition(sym) {
 function closeSelectedPosition() {
   if (!selectedSym) return;
   closePos(selectedSym);
+}
+
+// ══════════════════════════════════════
+// REALIZED P&L (FIFO lot matching from fill history)
+// ══════════════════════════════════════
+let realizedCache = null;
+let realizedLoading = false;
+
+async function fetchAllFills() {
+  const fills = [];
+  let pageToken = null;
+  for (let i = 0; i < 20; i++) {  // cap: 20 pages × 100 = 2000 fills
+    let url = '/v2/account/activities/FILL?page_size=100&direction=asc';
+    if (pageToken) url += '&page_token=' + encodeURIComponent(pageToken);
+    const batch = await tapi(url);
+    if (!batch || !batch.length) break;
+    fills.push(...batch);
+    if (batch.length < 100) break;
+    pageToken = batch[batch.length - 1].id;
+  }
+  return fills;
+}
+
+// FIFO realized P&L per symbol (real Alpaca dollars)
+function computeRealizedFIFO(fills) {
+  const lots = {};      // symbol -> FIFO queue of { qty, price }
+  const realized = {};  // symbol -> realized $
+  const sorted = [...fills].sort((a, b) =>
+    new Date(a.transaction_time) - new Date(b.transaction_time)
+  );
+
+  for (const f of sorted) {
+    const sym = f.symbol;
+    const qty = Math.abs(parseFloat(f.qty));
+    const px  = parseFloat(f.price);
+    if (!sym || !qty || !px) continue;
+    if (!lots[sym]) lots[sym] = [];
+    if (realized[sym] == null) realized[sym] = 0;
+
+    if (f.side === 'buy') {
+      lots[sym].push({ qty, price: px });
+    } else if (f.side === 'sell') {
+      let remaining = qty;
+      while (remaining > 0 && lots[sym].length > 0) {
+        const lot = lots[sym][0];
+        const matched = Math.min(remaining, lot.qty);
+        realized[sym] += matched * (px - lot.price);
+        lot.qty   -= matched;
+        remaining -= matched;
+        if (lot.qty <= 1e-9) lots[sym].shift();
+      }
+      if (remaining > 0) lots[sym].push({ qty: -remaining, price: px });  // short
+    }
+  }
+  return realized;
+}
+
+async function loadRealizedPnL(force = false) {
+  const note = document.getElementById('pnl-name-note');
+  const body = document.getElementById('pnl-name-body');
+
+  if (!force && realizedCache && (Date.now() - realizedCache.fetchedAt < 600000)) {
+    renderPnLByName(realizedCache.perSymbol);
+    return;
+  }
+  if (realizedLoading) return;
+  realizedLoading = true;
+  if (note) note.textContent = 'Computing from fill history…';
+
+  try {
+    const fills = await fetchAllFills();
+    const perSymbol = computeRealizedFIFO(fills);
+    realizedCache = { perSymbol, fetchedAt: Date.now() };
+    if (note) note.textContent = `${fills.length} fills analyzed`;
+    renderPnLByName(perSymbol);
+  } catch(e) {
+    if (note) note.textContent = 'Could not load fill history';
+    if (body) body.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--red);padding:16px">${e.message}</td></tr>`;
+  } finally {
+    realizedLoading = false;
+  }
+}
+
+function renderPnLByName(realizedBySymbol) {
+  const body = document.getElementById('pnl-name-body');
+  if (!body) return;
+
+  const openMap = {};
+  for (const p of positions) {
+    const ap = getSplitAdjustedPosition(p);
+    openMap[p.symbol] = parseFloat(ap.unrealized_pl);  // real $
+  }
+
+  const allSyms = new Set([...Object.keys(realizedBySymbol), ...Object.keys(openMap)]);
+  const rows = [...allSyms].map(sym => {
+    const realized   = realizedBySymbol[sym] || 0;
+    const unrealized = openMap[sym] || 0;
+    const isOpen     = openMap[sym] != null;
+    return { sym, realized, unrealized, total: realized + unrealized, isOpen };
+  }).sort((a, b) => b.total - a.total);
+
+  let totRealized = 0, totUnrealized = 0;
+  rows.forEach(r => { totRealized += r.realized; totUnrealized += r.unrealized; });
+
+  const setCard = (id, val) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = (val >= 0 ? '+' : '') + $$(md(val), true);
+    el.style.color = val >= 0 ? 'var(--green)' : 'var(--red)';
+  };
+  setCard('pnl-realized-total', totRealized);
+  setCard('pnl-unrealized-total', totUnrealized);
+  setCard('pnl-total-total', totRealized + totUnrealized);
+
+  const closedCount = rows.filter(r => !r.isOpen).length;
+  const realSub = document.getElementById('pnl-realized-sub');
+  if (realSub) realSub.textContent = `${closedCount} fully closed`;
+  const unrSub = document.getElementById('pnl-unrealized-sub');
+  if (unrSub) unrSub.textContent = `${positions.length} open`;
+
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--dim);padding:16px">No trade history yet</td></tr>';
+    return;
+  }
+
+  const cell = v => {
+    const c = v >= 0 ? 'var(--green)' : 'var(--red)';
+    return `<td style="color:${c};font-weight:600">${(v>=0?'+':'') + $$(md(v), true)}</td>`;
+  };
+
+  body.innerHTML = rows.map(r => `<tr>
+    <td class="sym">${r.sym}</td>
+    <td><span style="font-size:9px;padding:1px 6px;border-radius:3px;background:${r.isOpen?'var(--green-bg)':'var(--surface)'};color:${r.isOpen?'var(--green)':'var(--dim)'}">${r.isOpen?'OPEN':'CLOSED'}</span></td>
+    ${cell(r.realized)}
+    ${r.isOpen ? cell(r.unrealized) : '<td style="color:var(--dim)">—</td>'}
+    ${cell(r.total)}
+  </tr>`).join('');
 }
 
 // ── Compliance check renderer ──
