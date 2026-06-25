@@ -824,6 +824,16 @@
 
     <!-- Analytics screen (hidden until tab selected) -->
     <div id="analytics-screen">
+      <div class="section-hdr">P&amp;L Summary <span id="pnl-note" style="font-weight:400;font-size:10px;color:var(--dim)"></span></div>
+      <div class="stats-grid" id="pnl-cards" style="grid-template-columns:1fr 1fr 1fr">
+        <div class="stat-card"><div class="sc-label">Realized</div><div class="sc-val" id="m-pnl-realized" style="font-size:15px">—</div></div>
+        <div class="stat-card"><div class="sc-label">Unrealized</div><div class="sc-val" id="m-pnl-unrealized" style="font-size:15px">—</div></div>
+        <div class="stat-card"><div class="sc-label">Total</div><div class="sc-val" id="m-pnl-total" style="font-size:15px">—</div></div>
+      </div>
+
+      <div class="section-hdr" style="margin-top:6px">P&amp;L by Name</div>
+      <div class="compliance-card" id="m-pnl-by-name"><div style="padding:14px;text-align:center;color:var(--dim);font-size:12px">Computing…</div></div>
+
       <div class="section-hdr">Compliance <span id="comp-overall-badge" style="font-weight:400;font-size:10px"></span></div>
       <div class="compliance-card" id="comp-rows"></div>
 
@@ -1429,6 +1439,27 @@ function updateCapPreview() {
 
 function clearError() { document.getElementById('ot-error').textContent = ''; }
 
+// Fresh ask price at submit time (not cached)
+async function getFreshAskMobile(sym) {
+  try {
+    const snap = await req(DATA_BASE, `/v2/stocks/${encodeURIComponent(sym)}/snapshot?feed=iex`);
+    if (!snap) return null;
+    const px = snap.latestQuote?.ap || snap.latestTrade?.p || snap.dailyBar?.c || snap.prevDailyBar?.c || null;
+    return px ? { px } : null;
+  } catch { return null; }
+}
+
+// Sum real-dollar cost of open buy orders so stacked orders can't overdraw
+async function getPendingBuyCostMobile() {
+  try {
+    const open = await tapi('/v2/orders?status=open&limit=100');
+    return (open || []).filter(o => o.side === 'buy').reduce((s, o) => {
+      const q = parseFloat(o.qty || 0), lp = parseFloat(o.limit_price) || 0;
+      return s + (lp ? q * lp : 0);
+    }, 0);
+  } catch { return 0; }
+}
+
 async function submitOrder() {
   const sym    = document.getElementById('ot-sym').value.trim().toUpperCase();
   const shares = parseFloat(document.getElementById('ot-shares').value);
@@ -1436,44 +1467,78 @@ async function submitOrder() {
   if (!sym)              { showOtError('Enter a symbol'); return; }
   if (!shares || shares <= 0) { showOtError('Enter number of shares'); return; }
 
-  // Buying power check — ALWAYS enforced for buys, never skipped
+  const realQty = shares / MULTIPLIER;
+  const btn = document.getElementById('ot-submit');
+  btn.disabled = true;
+  btn.textContent = 'Checking price…';
+  clearError();
+
+  const body = {
+    symbol:        sym,
+    qty:           realQty.toString(),
+    side:          otSide,
+    type:          otOrderType,
+    time_in_force: 'day',
+  };
+  if (otOrderType === 'limit') {
+    const lp = parseFloat(document.getElementById('ot-limit').value);
+    if (!lp || lp <= 0) { showOtError('Enter a limit price'); btn.disabled = false; setSide(otSide); return; }
+    body.limit_price = lp.toFixed(2);
+  }
+
+  // ── Buy-side protection: fresh quote, marketable-limit ceiling, pending-aware, auto-shave ──
   if (otSide === 'buy') {
-    const px = getPx();
-    if (!px || px <= 0) { showOtError('Fetch a quote first — type the symbol above'); return; }
-    // 0.5% slippage buffer so market fills can't push you negative
-    const realCost = (shares / MULTIPLIER) * px * 1.005;
-    const rawEq    = cachedEquity + getSplitEquityDelta(cachedPositions);
-    const mockAcct = { equity: rawEq, cash: parseFloat(localStorage.__lastCash || rawEq),
-                       buying_power: parseFloat(localStorage.__lastRawBP || rawEq * 2),
-                       long_market_value: parseFloat(localStorage.__lastLMV || 0),
-                       short_market_value: '0' };
-    const effBP = getEffectiveBP(mockAcct, getSplitEquityDelta(cachedPositions));
-    if (realCost > effBP) {
-      const shortfall = (realCost - effBP) * MULTIPLIER;
-      showOtError(`Insufficient buying power — short by ${fmt$(shortfall)}`);
-      return;
+    try {
+      let refPx;
+      if (otOrderType === 'limit') {
+        refPx = parseFloat(document.getElementById('ot-limit').value);
+      } else {
+        const fresh = await getFreshAskMobile(sym);
+        if (!fresh) { btn.disabled = false; setSide(otSide); showOtError('Could not get a live price. Try again in a moment.'); return; }
+        refPx = fresh.px;
+      }
+
+      const ceilingPx   = otOrderType === 'limit' ? refPx : refPx * 1.003;
+      const pendingCost = await getPendingBuyCostMobile();
+      const rawEq       = cachedEquity + getSplitEquityDelta(cachedPositions);
+      const mockAcct    = { equity: rawEq,
+                            cash:               parseFloat(localStorage.__lastCash  || rawEq),
+                            buying_power:       parseFloat(localStorage.__lastRawBP || rawEq * 2),
+                            long_market_value:  parseFloat(localStorage.__lastLMV   || 0),
+                            short_market_value: '0' };
+      const effBP = getEffectiveBP(mockAcct, getSplitEquityDelta(cachedPositions)) - pendingCost;
+
+      if (effBP <= 0) { btn.disabled = false; setSide(otSide); showOtError('No buying power available (other open orders are using it)'); return; }
+
+      // Market → marketable limit so the fill is hard-capped
+      if (otOrderType === 'market') {
+        body.type = 'limit';
+        body.limit_price = ceilingPx.toFixed(2);
+      }
+
+      const worstCase = realQty * ceilingPx;
+      if (worstCase > effBP) {
+        const useRealQty = Math.floor((effBP / ceilingPx) * MULTIPLIER) / MULTIPLIER;
+        const affordableDisplay = Math.floor(useRealQty * MULTIPLIER);
+        if (affordableDisplay <= 0) {
+          btn.disabled = false; setSide(otSide);
+          showOtError(`Insufficient buying power. Need ${fmt$(md(worstCase))}, have ${fmt$(md(effBP))}.`);
+          return;
+        }
+        body.qty = useRealQty.toString();
+        document.getElementById('ot-shares').value = affordableDisplay;
+        showOtError(`Reduced to ${affordableDisplay.toLocaleString()} shares to fit available cash (${fmt$(md(effBP))}).`);
+        document.getElementById('ot-error').style.color = 'var(--amber)';
+      }
+    } catch(e) {
+      btn.disabled = false; setSide(otSide);
+      showOtError('Price check failed: ' + e.message); return;
     }
   }
 
-  const btn = document.getElementById('ot-submit');
-  btn.disabled = true;
   btn.textContent = 'Submitting…';
-  clearError();
 
   try {
-    const body = {
-      symbol:          sym,
-      qty:             (shares / MULTIPLIER).toString(),  // background: real Alpaca shares
-      side:            otSide,
-      type:            otOrderType,
-      time_in_force:   'day',
-    };
-    if (otOrderType === 'limit') {
-      const lp = parseFloat(document.getElementById('ot-limit').value);
-      if (!lp || lp <= 0) { showOtError('Enter a limit price'); btn.disabled = false; setSide(otSide); return; }
-      body.limit_price = lp.toFixed(2);
-    }
-
     await tapi('/v2/orders', { method: 'POST', body: JSON.stringify(body) });
 
     // Success feedback
@@ -1485,6 +1550,7 @@ async function submitOrder() {
       document.getElementById('ot-sym').value    = '';
       document.getElementById('ot-shares').value = '';
       document.getElementById('ot-limit').value  = '';
+      document.getElementById('ot-error').style.color = '';
       otQuotePx = null;
       document.getElementById('ot-quote-price').textContent = '';
       document.getElementById('ot-quote-chg').textContent   = '';
@@ -1514,6 +1580,114 @@ function showOtError(msg) {
 
 let currentTab = 'positions';
 
+// ══════════════════════════════════════
+// REALIZED P&L (mobile) — FIFO from fills
+// ══════════════════════════════════════
+let mRealizedCache = null;
+
+async function mFetchAllFills() {
+  const fills = [];
+  let pageToken = null;
+  for (let i = 0; i < 20; i++) {
+    let url = '/v2/account/activities/FILL?page_size=100&direction=asc';
+    if (pageToken) url += '&page_token=' + encodeURIComponent(pageToken);
+    const batch = await tapi(url);
+    if (!batch || !batch.length) break;
+    fills.push(...batch);
+    if (batch.length < 100) break;
+    pageToken = batch[batch.length - 1].id;
+  }
+  return fills;
+}
+
+function mComputeRealizedFIFO(fills) {
+  const lots = {}, realized = {};
+  const sorted = [...fills].sort((a, b) => new Date(a.transaction_time) - new Date(b.transaction_time));
+  for (const f of sorted) {
+    const sym = f.symbol, qty = Math.abs(parseFloat(f.qty)), px = parseFloat(f.price);
+    if (!sym || !qty || !px) continue;
+    if (!lots[sym]) lots[sym] = [];
+    if (realized[sym] == null) realized[sym] = 0;
+    if (f.side === 'buy') {
+      lots[sym].push({ qty, price: px });
+    } else if (f.side === 'sell') {
+      let rem = qty;
+      while (rem > 0 && lots[sym].length > 0) {
+        const lot = lots[sym][0];
+        const m = Math.min(rem, lot.qty);
+        realized[sym] += m * (px - lot.price);
+        lot.qty -= m; rem -= m;
+        if (lot.qty <= 1e-9) lots[sym].shift();
+      }
+      if (rem > 0) lots[sym].push({ qty: -rem, price: px });
+    }
+  }
+  return realized;
+}
+
+async function loadMobileRealizedPnL(force = false) {
+  const note = document.getElementById('pnl-note');
+  if (!force && mRealizedCache && (Date.now() - mRealizedCache.at < 600000)) {
+    renderMobilePnL(mRealizedCache.data);
+    return;
+  }
+  if (note) note.textContent = 'computing…';
+  try {
+    const fills = await mFetchAllFills();
+    const data = mComputeRealizedFIFO(fills);
+    mRealizedCache = { data, at: Date.now() };
+    if (note) note.textContent = `${fills.length} fills`;
+    renderMobilePnL(data);
+  } catch(e) {
+    if (note) note.textContent = 'error';
+  }
+}
+
+function renderMobilePnL(realizedBySym) {
+  const openMap = {};
+  cachedPositions.forEach(p => {
+    const ap = applyMobileSplit(p);
+    openMap[p.symbol] = parseFloat(ap.unrealized_pl);
+  });
+  const allSyms = new Set([...Object.keys(realizedBySym), ...Object.keys(openMap)]);
+  const rows = [...allSyms].map(sym => {
+    const r = realizedBySym[sym] || 0;
+    const u = openMap[sym] || 0;
+    const isOpen = openMap[sym] != null;
+    return { sym, r, u, total: r + u, isOpen };
+  }).sort((a, b) => b.total - a.total);
+
+  let totR = 0, totU = 0;
+  rows.forEach(x => { totR += x.r; totU += x.u; });
+
+  const setCard = (id, v) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = (v >= 0 ? '+' : '') + fmt$(md(v));
+    el.style.color = v >= 0 ? 'var(--green)' : 'var(--red)';
+  };
+  setCard('m-pnl-realized', totR);
+  setCard('m-pnl-unrealized', totU);
+  setCard('m-pnl-total', totR + totU);
+
+  const container = document.getElementById('m-pnl-by-name');
+  if (!container) return;
+  if (!rows.length) {
+    container.innerHTML = '<div style="padding:14px;text-align:center;color:var(--dim);font-size:12px">No trade history yet</div>';
+    return;
+  }
+  const valSpan = v => `<span style="color:${v>=0?'var(--green)':'var(--red)'};font-weight:700">${(v>=0?'+':'')+fmt$(md(v))}</span>`;
+  container.innerHTML = rows.map(r => `
+    <div class="comp-row">
+      <span class="comp-label">${r.sym}
+        <span style="font-size:8px;padding:1px 5px;border-radius:3px;margin-left:4px;background:${r.isOpen?'var(--green-bg)':'var(--border)'};color:${r.isOpen?'var(--green)':'var(--dim)'}">${r.isOpen?'OPEN':'CLOSED'}</span>
+      </span>
+      <span style="font-size:12px;text-align:right">${valSpan(r.total)}<br>
+        <span style="font-size:9px;color:var(--dim)">R ${(r.r>=0?'+':'')+fmt$(md(r.r))}${r.isOpen?' · U '+(r.u>=0?'+':'')+fmt$(md(r.u)):''}</span>
+      </span>
+    </div>`).join('');
+}
+
 function switchTab(tab) {
   currentTab = tab;
   document.getElementById('tab-pos-btn').classList.toggle('active', tab === 'positions');
@@ -1521,7 +1695,7 @@ function switchTab(tab) {
   document.getElementById('positions-section').classList.toggle('hidden', tab !== 'positions');
   document.getElementById('analytics-screen').classList.toggle('visible', tab === 'analytics');
   // Render analytics on first open or refresh
-  if (tab === 'analytics') renderAnalytics();
+  if (tab === 'analytics') { renderAnalytics(); loadMobileRealizedPnL(); }
 }
 
 function renderAnalytics() {
