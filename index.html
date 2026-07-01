@@ -1719,11 +1719,13 @@ async function submitOrder() {
   if (trail) body.trail_percent = parseFloat(trail).toFixed(2);
 
   // ── BUY-SIDE PROTECTION ──────────────────────────────────────────────
-  // The goal: never let a buy push cash negative. Three layers:
+  // Goal: never let a buy push cash negative, while keeping TRUE market orders
+  // so fills are instant. Approach:
   //   1) Re-fetch a FRESH quote right now (cached price may be stale)
-  //   2) Convert a market buy into a MARKETABLE LIMIT order with a hard price
-  //      ceiling — Alpaca will not fill above the limit, capping the spend.
-  //   3) Account for cash already committed to other OPEN buy orders.
+  //   2) Size against price + a slippage buffer so there's a cash cushion
+  //   3) Account for cash already committed to other OPEN buy orders
+  //   4) Send as a genuine market order (no limit conversion)
+  const SLIPPAGE_BUFFER = 1.005;  // size against 0.5% above quote for cushion
   if (side === 'buy') {
     try {
       // Layer 1: fresh price
@@ -1739,43 +1741,28 @@ async function submitOrder() {
       // Layer 3: subtract cash already tied up in open buy orders
       const pendingCost = await getPendingBuyCost();
       const effBP       = getEffectiveBP() - pendingCost;
-
       if (effBP <= 0) { btn.disabled = false; setSide(side); return otErr('No buying power available (other open orders are using it)'); }
 
-      // Layer 2: for market/stop orders, set a price ceiling 0.3% above the ask
-      // and send as a (stop-)limit so the fill is hard-capped. The limit is still
-      // marketable (above ask) so it fills immediately like a market order.
-      let ceilingPx = refPx;
-      if (type === 'market') {
-        ceilingPx = refPx * 1.003;
-        body.type = 'limit';
-        body.limit_price = ceilingPx.toFixed(2);
-      } else if (type === 'stop') {
-        ceilingPx = refPx * 1.003;
-        body.type = 'stop_limit';
-        body.limit_price = (parseFloat(stop) * 1.003).toFixed(2);
-        ceilingPx = parseFloat(stop) * 1.003;
-      }
+      // Layer 2: size against price + buffer. This is the estimated worst-case cost.
+      const sizingPx      = refPx * SLIPPAGE_BUFFER;
+      const worstCaseCost = realQty * sizingPx;
 
-      // Worst-case cost = qty × ceiling price. This is the MOST you could ever spend.
-      const worstCaseCost = realQty * ceilingPx;
-
-      // Layer: if worst-case exceeds available BP, shave shares to fit
+      // If it won't fit, shave shares down to what the buffered price allows
       if (worstCaseCost > effBP) {
-        const affordableRealShares  = Math.floor((effBP / ceilingPx) * MULTIPLIER) / MULTIPLIER;
-        const affordableDisplay     = Math.floor(affordableRealShares * MULTIPLIER);
+        const affordableRealShares = Math.floor((effBP / sizingPx) * MULTIPLIER) / MULTIPLIER;
+        const affordableDisplay    = Math.floor(affordableRealShares * MULTIPLIER);
         if (affordableDisplay <= 0) {
           btn.disabled = false; setSide(side);
-          return otErr(`Insufficient buying power. Need ${$$(md(worstCaseCost))}, have ${$$(md(effBP))} available.`);
+          return otErr(`Insufficient buying power. Need ~${$$(md(worstCaseCost))}, have ${$$(md(effBP))} available.`);
         }
-        // Auto-reduce the order to what fits, and tell the user why
-        body.qty = (affordableRealShares).toString();
+        body.qty = affordableRealShares.toString();
         const reducedFrom = qty;
         document.getElementById('ot-qty').value = affordableDisplay;
-        otErr(`Reduced from ${Number(reducedFrom).toLocaleString()} to ${affordableDisplay.toLocaleString()} shares — full size would exceed available cash (${$$(md(effBP))}).`);
+        otErr(`Reduced from ${Number(reducedFrom).toLocaleString()} to ${affordableDisplay.toLocaleString()} shares — full size would risk negative cash after slippage.`);
         errEl.style.color = 'var(--amber)';
-        // continue with the reduced quantity (do not return)
+        // continue with reduced qty — order still sent as a true market order
       }
+      // NOTE: body.type stays 'market' — no limit conversion, so fills are instant.
     } catch(e) {
       btn.disabled = false; setSide(side);
       return otErr('Price check failed: ' + e.message);
@@ -1880,34 +1867,32 @@ async function submitATOrder() {
 
   btn.disabled = true; btn.textContent = 'Checking price…';
 
-  // Buy-side protection: fresh quote, marketable-limit ceiling, pending-order aware, auto-shave
+  // Buy-side protection: fresh quote + slippage buffer sizing, pending-aware, auto-shave.
+  // Order stays a TRUE market order so fills are instant.
   if (side === 'buy') {
     try {
       const fresh = await getFreshAsk(atSym);
       if (!fresh) { btn.disabled = false; setATMode(atMode); alert('Could not get a live price for ' + atSym + '. Try again in a moment.'); return; }
-      const ceilingPx   = fresh.px * 1.003;          // 0.3% ceiling
+      const sizingPx    = fresh.px * 1.005;          // 0.5% buffer for slippage cushion
       const pendingCost = await getPendingBuyCost();
       const effBP       = getEffectiveBP() - pendingCost;
       if (effBP <= 0) { btn.disabled = false; setATMode(atMode); alert('No buying power available (other open orders are using it)'); return; }
 
-      // Convert to marketable limit so fill is hard-capped
-      body.type = 'limit';
-      body.limit_price = ceilingPx.toFixed(2);
-
       let useRealQty = realQty;
-      const worstCase = realQty * ceilingPx;
+      const worstCase = realQty * sizingPx;
       if (worstCase > effBP) {
-        useRealQty = Math.floor((effBP / ceilingPx) * MULTIPLIER) / MULTIPLIER;
+        useRealQty = Math.floor((effBP / sizingPx) * MULTIPLIER) / MULTIPLIER;
         const affordableDisplay = Math.floor(useRealQty * MULTIPLIER);
         if (affordableDisplay <= 0) {
           btn.disabled = false; setATMode(atMode);
-          alert(`Insufficient buying power. Need ${$$(md(worstCase))}, have ${$$(md(effBP))} available.`);
+          alert(`Insufficient buying power. Need ~${$$(md(worstCase))}, have ${$$(md(effBP))} available.`);
           return;
         }
         body.qty = useRealQty.toString();
         document.getElementById('at-shares').value = affordableDisplay;
-        alert(`Reduced to ${affordableDisplay.toLocaleString()} shares — full size would exceed available cash (${$$(md(effBP))}).`);
+        alert(`Reduced to ${affordableDisplay.toLocaleString()} shares — full size would risk negative cash after slippage.`);
       }
+      // body.type stays 'market' — instant fill
     } catch(e) {
       btn.disabled = false; setATMode(atMode);
       alert('Price check failed: ' + e.message); return;
@@ -2234,8 +2219,12 @@ function detectNewFills(allOrders) {
   });
 
   if (newFills > 0) {
-    // Sort newest first
-    tradeLedger.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    // Sort newest first — use filled_at (fallback submitted_at); there is no `timestamp` field
+    tradeLedger.sort((a, b) => {
+      const ta = a.filled_at || a.submitted_at || a.date || '';
+      const tb = b.filled_at || b.submitted_at || b.date || '';
+      return tb.localeCompare(ta);
+    });
     saveLedger();
     renderLedger();
   }
