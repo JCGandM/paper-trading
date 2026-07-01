@@ -1486,7 +1486,8 @@ async function submitOrder() {
     body.limit_price = lp.toFixed(2);
   }
 
-  // ── Buy-side protection: fresh quote, marketable-limit ceiling, pending-aware, auto-shave ──
+  // ── Buy-side protection: fresh quote + slippage buffer sizing, pending-aware, auto-shave.
+  //    Order stays a TRUE market order so fills are instant. ──
   if (otSide === 'buy') {
     try {
       let refPx;
@@ -1498,7 +1499,8 @@ async function submitOrder() {
         refPx = fresh.px;
       }
 
-      const ceilingPx   = otOrderType === 'limit' ? refPx : refPx * 1.003;
+      // Size against price + 0.5% buffer (limit orders use their exact price)
+      const sizingPx    = otOrderType === 'limit' ? refPx : refPx * 1.005;
       const pendingCost = await getPendingBuyCostMobile();
       const rawEq       = cachedEquity + getSplitEquityDelta(cachedPositions);
       const mockAcct    = { equity: rawEq,
@@ -1510,26 +1512,21 @@ async function submitOrder() {
 
       if (effBP <= 0) { btn.disabled = false; setSide(otSide); showOtError('No buying power available (other open orders are using it)'); return; }
 
-      // Market → marketable limit so the fill is hard-capped
-      if (otOrderType === 'market') {
-        body.type = 'limit';
-        body.limit_price = ceilingPx.toFixed(2);
-      }
-
-      const worstCase = realQty * ceilingPx;
+      const worstCase = realQty * sizingPx;
       if (worstCase > effBP) {
-        const useRealQty = Math.floor((effBP / ceilingPx) * MULTIPLIER) / MULTIPLIER;
+        const useRealQty = Math.floor((effBP / sizingPx) * MULTIPLIER) / MULTIPLIER;
         const affordableDisplay = Math.floor(useRealQty * MULTIPLIER);
         if (affordableDisplay <= 0) {
           btn.disabled = false; setSide(otSide);
-          showOtError(`Insufficient buying power. Need ${fmt$(md(worstCase))}, have ${fmt$(md(effBP))}.`);
+          showOtError(`Insufficient buying power. Need ~${fmt$(md(worstCase))}, have ${fmt$(md(effBP))}.`);
           return;
         }
         body.qty = useRealQty.toString();
         document.getElementById('ot-shares').value = affordableDisplay;
-        showOtError(`Reduced to ${affordableDisplay.toLocaleString()} shares to fit available cash (${fmt$(md(effBP))}).`);
+        showOtError(`Reduced to ${affordableDisplay.toLocaleString()} shares to avoid negative cash after slippage.`);
         document.getElementById('ot-error').style.color = 'var(--amber)';
       }
+      // body.type stays 'market' — instant fill, no limit conversion
     } catch(e) {
       btn.disabled = false; setSide(otSide);
       showOtError('Price check failed: ' + e.message); return;
