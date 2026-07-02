@@ -817,9 +817,10 @@
         <button class="sort-chip"        data-sort="gain"    onclick="setSort('gain')">Most Gain</button>
         <button class="sort-chip"        data-sort="loss"    onclick="setSort('loss')">Most Loss</button>
       </div>
-      <div id="positions-list">
-        <div id="positions-empty" style="display:none">No open positions</div>
-      </div>
+      <input id="pos-filter" type="text" placeholder="Filter by ticker…" oninput="setFilter(this.value)"
+        style="width:100%;box-sizing:border-box;margin:2px 0 8px;padding:9px 12px;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none">
+      <div id="positions-empty" style="display:none">No open positions</div>
+      <div id="positions-list"></div>
     </div>
 
     <!-- Analytics screen (hidden until tab selected) -->
@@ -999,11 +1000,12 @@ const cls = v => v >= 0 ? 'pos' : 'neg';
 
 // ── Split equity delta ────────────────────────────────────
 function getSplitEquityDelta(positions) {
+  if (!Array.isArray(positions)) return 0;
   return positions.reduce((total, p) => {
     const split = splitAdjustments.find(s => s.symbol === p.symbol);
     if (!split) return total;
-    const rawMV  = parseFloat(p.market_value);
-    const corrMV = rawMV * parseFloat(split.ratio);
+    const rawMV  = parseFloat(p.market_value) || 0;
+    const corrMV = rawMV * (parseFloat(split.ratio) || 1);
     return total + (corrMV - rawMV);
   }, 0);
 }
@@ -1024,10 +1026,24 @@ function getEffectiveBP(account, splitDelta) {
 
 // ── Main refresh ─────────────────────────────────────────
 let refreshTimer = null;
+let lastRefreshAt = 0;
+
+// Mark the timestamp amber if data is older than 60s (e.g. a refresh silently failed)
+setInterval(() => {
+  const luEl = document.getElementById('last-updated');
+  if (luEl && lastRefreshAt && Date.now() - lastRefreshAt > 60000) {
+    luEl.style.color = 'var(--amber)';
+    luEl.textContent = luEl.textContent.replace(/ · stale$/, '') + ' · stale';
+  }
+}, 15000);
+
+// Null-safe DOM setters — a single missing element must never crash the whole refresh
+function setText(id, text) { const el = document.getElementById(id); if (el) el.textContent = text; }
+function setClass(id, cls) { const el = document.getElementById(id); if (el) el.className = cls; }
 
 async function refresh() {
   const btn = document.getElementById('refresh-btn');
-  btn.classList.add('spinning');
+  if (btn) btn.classList.add('spinning');
 
   try {
     // Fetch account and positions in parallel
@@ -1036,7 +1052,8 @@ async function refresh() {
       tapi('/v2/positions'),
     ]);
 
-    const splitDelta = getSplitEquityDelta(posData);
+    const positions = Array.isArray(posData) ? posData : [];
+    const splitDelta = getSplitEquityDelta(positions);
     const eq         = parseFloat(account.equity || 0) + splitDelta;
     const leq        = parseFloat(account.last_equity || account.equity || 0) + splitDelta;
     const cash       = parseFloat(account.cash || 0);
@@ -1050,52 +1067,53 @@ async function refresh() {
     const cashPct    = eq ? cash / eq * 100 : 0;
 
     // Cache for sort re-renders and order drawer BP checks
-    cachedPositions = posData;
+    cachedPositions = positions;
     cachedEquity    = parseFloat(account.equity || 0);
     localStorage.__lastCash  = account.cash;
     localStorage.__lastRawBP = account.buying_power;
     localStorage.__lastLMV   = account.long_market_value;
 
     // ── Hero ──
-    document.getElementById('hero-value').textContent = fmt$(md(eq), 1);
-    const dplEl = document.getElementById('hero-dpl');
-    dplEl.textContent = (dpl >= 0 ? '+' : '') + fmt$(md(dpl), 1) + '  ' + fmtPct(dplPct);
-    dplEl.className = cls(dpl);
+    setText('hero-value', fmt$(md(eq), 1));
+    setText('hero-dpl', (dpl >= 0 ? '+' : '') + fmt$(md(dpl), 1) + '  ' + fmtPct(dplPct));
+    setClass('hero-dpl', cls(dpl));
 
     // ── Stats row ──
-    document.getElementById('stat-cash').textContent = fmt$(md(cash), 1);
-    document.getElementById('stat-bp').textContent   = fmt$(md(bp), 1);
-    document.getElementById('stat-pos').textContent  = posData.length;
-    document.getElementById('pos-count').textContent = '(' + posData.length + ')';
+    setText('stat-cash', fmt$(md(cash), 1));
+    setText('stat-bp',   fmt$(md(bp), 1));
+    setText('stat-pos',  positions.length);
+    setText('pos-count', '(' + positions.length + ')');
 
     // ── Position cards ──
-    renderPositionCards(posData, parseFloat(account.equity || 0));
-    // Re-render analytics if that tab is open
+    renderPositionCards(positions, parseFloat(account.equity || 0));
     if (currentTab === 'analytics') renderAnalytics();
 
     // ── Leverage bar ──
-    document.getElementById('lev-invested').textContent  = fmt$(md(invested), 1) + ' (' + investedPct.toFixed(1) + '%)';
-    document.getElementById('lev-cash-pct').textContent  = cashPct.toFixed(1) + '%';
+    setText('lev-invested', fmt$(md(invested), 1) + ' (' + investedPct.toFixed(1) + '%)');
+    setText('lev-cash-pct', cashPct.toFixed(1) + '%');
     const bar = document.getElementById('lev-bar');
-    bar.style.width      = Math.min(investedPct, 100) + '%';
-    bar.style.background = investedPct > 95 ? 'var(--amber)' : investedPct >= 70 ? 'var(--green)' : 'var(--red)';
+    if (bar) {
+      bar.style.width      = Math.min(investedPct, 100) + '%';
+      bar.style.background = investedPct > 95 ? 'var(--amber)' : investedPct >= 70 ? 'var(--green)' : 'var(--red)';
+    }
 
     // ── Timestamp ──
-    document.getElementById('last-updated').textContent =
-      'Updated ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    lastRefreshAt = Date.now();
+    setText('last-updated', 'Updated ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    const luEl = document.getElementById('last-updated');
+    if (luEl) luEl.style.color = 'var(--muted)';
 
   } catch(e) {
-    showError('Could not load data: ' + e.message);
+    showError('Could not load data: ' + (e && e.message ? e.message : e));
   } finally {
-    btn.classList.remove('spinning');
-    btn.style.transform = '';
+    if (btn) { btn.classList.remove('spinning'); btn.style.transform = ''; }
   }
 }
 
 function showError(msg) {
-  document.getElementById('hero-value').textContent = '—';
-  document.getElementById('hero-dpl').textContent   = msg;
-  document.getElementById('hero-dpl').className     = 'neg';
+  setText('hero-value', '—');
+  setText('hero-dpl', msg);
+  setClass('hero-dpl', 'neg');
 }
 
 // ══════════════════════════════════════
@@ -1103,8 +1121,14 @@ function showError(msg) {
 // ══════════════════════════════════════
 
 let currentSort = 'sym';
+let currentFilter = '';
 let cachedPositions = [];
 let cachedEquity    = 0;
+
+function setFilter(val) {
+  currentFilter = (val || '').trim().toUpperCase();
+  renderPositionCards(cachedPositions, cachedEquity);
+}
 
 function setSort(key) {
   currentSort = key;
@@ -1157,19 +1181,32 @@ function sortPositions(positions) {
 }
 
 function renderPositionCards(rawPositions, equityRaw) {
-  const list = document.getElementById('positions-list');
+  const list  = document.getElementById('positions-list');
   const empty = document.getElementById('positions-empty');
+  if (!list) return;  // page not ready
 
-  if (!rawPositions.length) {
-    empty.style.display = 'block';
+  const rows = Array.isArray(rawPositions) ? rawPositions : [];
+
+  // Apply ticker filter
+  const filtered = currentFilter
+    ? rows.filter(p => (p.symbol || '').toUpperCase().includes(currentFilter))
+    : rows;
+
+  if (!rows.length) {
+    if (empty) { empty.style.display = 'block'; empty.textContent = 'No open positions'; }
     list.innerHTML = '';
     return;
   }
-  empty.style.display = 'none';
+  if (!filtered.length) {
+    if (empty) { empty.style.display = 'block'; empty.textContent = 'No positions match "' + currentFilter + '"'; }
+    list.innerHTML = '';
+    return;
+  }
+  if (empty) empty.style.display = 'none';
 
   // Apply split corrections then sort
-  const positions = sortPositions(rawPositions.map(applyMobileSplit));
-  const totalEq   = equityRaw + getSplitEquityDelta(rawPositions);
+  const positions = sortPositions(filtered.map(applyMobileSplit));
+  const totalEq   = (equityRaw || 0) + getSplitEquityDelta(rows);
 
   list.innerHTML = positions.map(p => {
     const qty      = parseFloat(p.qty);
@@ -1777,16 +1814,20 @@ function renderAnalytics() {
 
 // ── Boot ─────────────────────────────────────────────────
 (function boot() {
-  const ok = loadConfig();
+  let ok = false;
+  try { ok = loadConfig(); } catch { ok = false; }
 
   if (!ok) {
-    document.getElementById('top-bar').style.display  = 'none';
-    document.getElementById('content').style.display  = 'none';
-    document.getElementById('setup-screen').style.display = 'flex';
+    const tb = document.getElementById('top-bar');
+    const ct = document.getElementById('content');
+    const ss = document.getElementById('setup-screen');
+    if (tb) tb.style.display = 'none';
+    if (ct) ct.style.display = 'none';
+    if (ss) ss.style.display = 'flex';
     return;
   }
 
-  document.getElementById('port-name').textContent = PORTFOLIO_NAME;
+  setText('port-name', PORTFOLIO_NAME);
 
   // Initial load
   refresh();
@@ -1798,6 +1839,46 @@ function renderAnalytics() {
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) refresh();
   });
+
+  // ── Pull-to-refresh ──
+  const content = document.getElementById('content');
+  if (content) {
+    let startY = 0, pulling = false;
+    const indicator = document.createElement('div');
+    indicator.id = 'ptr-indicator';
+    indicator.style.cssText = 'position:fixed;top:0;left:0;right:0;text-align:center;padding:8px;font-size:12px;color:var(--muted);background:var(--surface);transform:translateY(-100%);transition:transform .2s;z-index:50;pointer-events:none';
+    indicator.textContent = '↓ Pull to refresh';
+    document.body.appendChild(indicator);
+
+    content.addEventListener('touchstart', (e) => {
+      if (content.scrollTop <= 0) { startY = e.touches[0].clientY; pulling = true; }
+    }, { passive: true });
+
+    content.addEventListener('touchmove', (e) => {
+      if (!pulling) return;
+      const dy = e.touches[0].clientY - startY;
+      if (dy > 0 && dy < 120) {
+        indicator.style.transform = `translateY(${Math.min(dy - 100, 0)}%)`;
+        if (dy > 70) indicator.textContent = '↑ Release to refresh';
+        else indicator.textContent = '↓ Pull to refresh';
+      }
+    }, { passive: true });
+
+    content.addEventListener('touchend', (e) => {
+      if (!pulling) return;
+      const dy = e.changedTouches[0].clientY - startY;
+      if (dy > 70) {
+        indicator.style.transform = 'translateY(0)';
+        indicator.textContent = '↻ Refreshing…';
+        Promise.resolve(refresh()).finally(() => {
+          setTimeout(() => { indicator.style.transform = 'translateY(-100%)'; }, 400);
+        });
+      } else {
+        indicator.style.transform = 'translateY(-100%)';
+      }
+      pulling = false;
+    }, { passive: true });
+  }
 })();
 </script>
 </body>
