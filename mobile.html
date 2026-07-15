@@ -125,6 +125,31 @@
       font-size: 16px;
       font-weight: 600;
     }
+    #hero-returns {
+      display: flex;
+      gap: 8px;
+      margin-top: 14px;
+    }
+    .ret-chip {
+      flex: 1;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px 10px;
+    }
+    .rc-label {
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--dim);
+      margin-bottom: 3px;
+    }
+    .rc-val {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+    }
     .pos { color: var(--green); }
     .neg { color: var(--red); }
     .dim { color: var(--dim); }
@@ -770,6 +795,21 @@
       <div class="label">Portfolio Value</div>
       <div id="hero-value">—</div>
       <div id="hero-dpl" class="dim">—</div>
+      <!-- Returns chips -->
+      <div id="hero-returns">
+        <div class="ret-chip">
+          <div class="rc-label">YTD</div>
+          <div class="rc-val" id="hero-ytd">—</div>
+        </div>
+        <div class="ret-chip">
+          <div class="rc-label">vs SPY</div>
+          <div class="rc-val" id="hero-ytd-spy">—</div>
+        </div>
+        <div class="ret-chip">
+          <div class="rc-label">Since Inception</div>
+          <div class="rc-val" id="hero-itd">—</div>
+        </div>
+      </div>
     </div>
 
     <!-- Quick stats row -->
@@ -809,13 +849,12 @@
     <!-- Positions section -->
     <div id="positions-section">
       <div class="section-hdr">Positions <span id="pos-count" style="color:var(--muted);font-weight:400"></span></div>
-      <div id="sort-row">
-        <button class="sort-chip active" data-sort="sym"     onclick="setSort('sym')">A – Z</button>
-        <button class="sort-chip"        data-sort="size"    onclick="setSort('size')">Biggest</button>
-        <button class="sort-chip"        data-sort="day_best" onclick="setSort('day_best')">Best Today</button>
-        <button class="sort-chip"        data-sort="day_worst" onclick="setSort('day_worst')">Worst Today</button>
-        <button class="sort-chip"        data-sort="gain"    onclick="setSort('gain')">Most Gain</button>
-        <button class="sort-chip"        data-sort="loss"    onclick="setSort('loss')">Most Loss</button>
+      <div id="sort-row" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        <span style="font-size:11px;color:var(--dim);font-weight:600;margin-right:2px">Sort by:</span>
+        <button class="sort-chip active" data-sort="sym"  onclick="setSort('sym')">Name <span class="sort-arrow">↑</span></button>
+        <button class="sort-chip"        data-sort="size" onclick="setSort('size')">Size <span class="sort-arrow"></span></button>
+        <button class="sort-chip"        data-sort="day"  onclick="setSort('day')">Day P&amp;L <span class="sort-arrow"></span></button>
+        <button class="sort-chip"        data-sort="total" onclick="setSort('total')">Total P&amp;L <span class="sort-arrow"></span></button>
       </div>
       <input id="pos-filter" type="text" placeholder="Filter by ticker…" oninput="setFilter(this.value)"
         style="width:100%;box-sizing:border-box;margin:2px 0 8px;padding:9px 12px;background:var(--card);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:14px;outline:none">
@@ -825,6 +864,35 @@
 
     <!-- Analytics screen (hidden until tab selected) -->
     <div id="analytics-screen">
+      <div class="section-hdr">Returns <span id="ret-note" style="font-weight:400;font-size:10px;color:var(--dim)"></span></div>
+      <div class="compliance-card" style="padding:4px 0">
+        <div class="comp-row" style="border-bottom:1px solid var(--border)">
+          <span class="comp-label" style="flex:1">Period</span>
+          <span style="width:70px;text-align:right;font-size:10px;color:var(--dim);font-weight:700">PORTFOLIO</span>
+          <span style="width:56px;text-align:right;font-size:10px;color:var(--dim);font-weight:700">SPY</span>
+          <span style="width:56px;text-align:right;font-size:10px;color:var(--dim);font-weight:700">QQQ</span>
+        </div>
+        <div class="comp-row">
+          <span class="comp-label" style="flex:1">YTD</span>
+          <span id="ra-ytd-port" style="width:70px;text-align:right;font-weight:700">—</span>
+          <span id="ra-ytd-spy"  style="width:56px;text-align:right">—</span>
+          <span id="ra-ytd-qqq"  style="width:56px;text-align:right">—</span>
+        </div>
+        <div class="comp-row" style="border-bottom:none">
+          <span class="comp-label" style="flex:1">Since Inception</span>
+          <span id="ra-itd-port" style="width:70px;text-align:right;font-weight:700">—</span>
+          <span id="ra-itd-spy"  style="width:56px;text-align:right">—</span>
+          <span id="ra-itd-qqq"  style="width:56px;text-align:right">—</span>
+        </div>
+      </div>
+      <div class="stats-grid" style="grid-template-columns:1fr 1fr;margin-top:8px">
+        <div class="stat-card"><div class="sc-label">YTD Alpha vs SPY</div><div class="sc-val" id="ra-alpha-spy" style="font-size:16px">—</div></div>
+        <div class="stat-card"><div class="sc-label">YTD Alpha vs QQQ</div><div class="sc-val" id="ra-alpha-qqq" style="font-size:16px">—</div></div>
+      </div>
+
+      <div class="section-hdr" style="margin-top:6px">Monthly Returns</div>
+      <div class="compliance-card" id="ra-monthly"><div style="padding:14px;text-align:center;color:var(--dim);font-size:12px">No log data yet</div></div>
+
       <div class="section-hdr">P&amp;L Summary <span id="pnl-note" style="font-weight:400;font-size:10px;color:var(--dim)"></span></div>
       <div class="stats-grid" id="pnl-cards" style="grid-template-columns:1fr 1fr 1fr">
         <div class="stat-card"><div class="sc-label">Realized</div><div class="sc-val" id="m-pnl-realized" style="font-size:15px">—</div></div>
@@ -946,6 +1014,8 @@
 let KEY = '', SECRET = '', MULTIPLIER = 50, MAX_LEVERAGE = 100;
 let PORTFOLIO_NAME = '';
 let splitAdjustments = [];
+let ACTIVE_ID = '';
+let dailyLog = [];
 
 const TRADING_BASE = 'https://paper-api.alpaca.markets';
 const DATA_BASE    = 'https://data.alpaca.markets';
@@ -957,6 +1027,7 @@ function loadConfig() {
     const cfg        = portfolios[activeId];
     if (!cfg || !cfg.key || !cfg.secret) return false;
 
+    ACTIVE_ID      = activeId;
     KEY            = cfg.key;
     SECRET         = cfg.secret;
     MULTIPLIER     = cfg.multiplier || 50;
@@ -967,6 +1038,9 @@ function loadConfig() {
     splitAdjustments = JSON.parse(
       localStorage.getItem(`pp_${activeId}_splits`) || '[]'
     );
+    // Load the daily equity log (written by the desktop app) for YTD/ITD returns
+    try { dailyLog = JSON.parse(localStorage.getItem(`pp_${activeId}_daily_log`) || '[]'); }
+    catch { dailyLog = []; }
     return true;
   } catch { return false; }
 }
@@ -981,6 +1055,33 @@ async function req(base, path, opts = {}) {
   return r.json();
 }
 const tapi = (path, opts) => req(TRADING_BASE, path, opts);
+const dapi = (path, opts) => req(DATA_BASE, path, opts);
+
+// ── Returns helpers (ported from desktop) ────────────────
+function ytdStartDate() {
+  const jan1 = new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0];
+  const sorted = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
+  const inception = sorted.length ? sorted[0].date : null;
+  return (inception && inception > jan1) ? inception : jan1;
+}
+function getInceptionDate() {
+  const sorted = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
+  return sorted.length ? sorted[0].date : new Date().toISOString().split('T')[0];
+}
+function portReturnOverLog(entries) {
+  if (!entries.length) return null;
+  const start = entries[0].equity, end = entries[entries.length - 1].equity;
+  return start > 0 ? (end - start) / start * 100 : null;
+}
+async function fetchBenchmarkReturn(sym, startDate, endDate) {
+  try {
+    const data = await dapi(`/v2/stocks/${encodeURIComponent(sym)}/bars?timeframe=1Day&start=${startDate}&end=${endDate}&limit=300&feed=iex&adjustment=split`);
+    const bars = data?.bars;
+    if (!bars || bars.length < 2) return null;
+    const base = bars[0].c, last = bars[bars.length - 1].c;
+    return base > 0 ? (last - base) / base * 100 : null;
+  } catch { return null; }
+}
 
 // ── Formatting helpers ───────────────────────────────────
 function fmt$(n, decimals = 0) {
@@ -1061,7 +1162,12 @@ async function refresh() {
     const smv        = Math.abs(parseFloat(account.short_market_value || 0));
     const invested   = lmv + smv;
     const bp         = getEffectiveBP(account, splitDelta);
-    const dpl        = eq - leq;
+    // Day P&L: sum split-corrected per-position intraday P&L instead of the
+    // contaminated (equity − last_equity) identity, which inflated split names.
+    const dpl        = positions.reduce((sum, p) => {
+      const ap = applyMobileSplit(p);
+      return sum + parseFloat(ap.unrealized_intraday_pl || 0);
+    }, 0);
     const dplPct     = leq ? dpl / leq * 100 : 0;
     const investedPct = eq ? invested / eq * 100 : 0;
     const cashPct    = eq ? cash / eq * 100 : 0;
@@ -1103,6 +1209,12 @@ async function refresh() {
     const luEl = document.getElementById('last-updated');
     if (luEl) luEl.style.color = 'var(--muted)';
 
+    // ── Daily log snapshot (keeps YTD current from mobile) ──
+    autoLogDaily(eq, cash, invested);
+
+    // ── Hero returns (YTD / vs SPY / ITD) ──
+    renderHeroReturns(eq);
+
   } catch(e) {
     showError('Could not load data: ' + (e && e.message ? e.message : e));
   } finally {
@@ -1121,6 +1233,8 @@ function showError(msg) {
 // ══════════════════════════════════════
 
 let currentSort = 'sym';
+// Default direction per sort key: name A→Z, everything else biggest-first (desc)
+let sortDir = { sym: 'asc', size: 'desc', day: 'desc', total: 'desc' };
 let currentFilter = '';
 let cachedPositions = [];
 let cachedEquity    = 0;
@@ -1131,10 +1245,19 @@ function setFilter(val) {
 }
 
 function setSort(key) {
+  // Press same key again → flip direction. New key → sensible default direction.
+  if (currentSort === key) {
+    sortDir[key] = sortDir[key] === 'asc' ? 'desc' : 'asc';
+  }
   currentSort = key;
-  document.querySelectorAll('.sort-chip').forEach(c =>
-    c.classList.toggle('active', c.dataset.sort === key)
-  );
+
+  document.querySelectorAll('.sort-chip').forEach(c => {
+    const isActive = c.dataset.sort === key;
+    c.classList.toggle('active', isActive);
+    const arrow = c.querySelector('.sort-arrow');
+    if (arrow) arrow.textContent = isActive ? (sortDir[key] === 'asc' ? '↑' : '↓') : '';
+  });
+
   renderPositionCards(cachedPositions, cachedEquity);
 }
 
@@ -1149,32 +1272,32 @@ function applyMobileSplit(p) {
   const rawCost = parseFloat(p.cost_basis);
   const corrMV  = corrQty * currPx;
   const corrPL  = corrMV - rawCost;
+  const corrIntraday = parseFloat(p.unrealized_intraday_pl || 0) * mult;  // scale $ by split
   return {
     ...p,
-    _mult:           mult,
-    qty:             corrQty.toString(),
-    market_value:    corrMV.toString(),
-    unrealized_pl:   corrPL.toString(),
-    unrealized_plpc: rawCost ? (corrPL / rawCost).toString() : '0',
-    avg_entry_price: (parseFloat(p.avg_entry_price) / mult).toString(),
+    _mult:                    mult,
+    qty:                      corrQty.toString(),
+    market_value:             corrMV.toString(),
+    unrealized_pl:            corrPL.toString(),
+    unrealized_plpc:          rawCost ? (corrPL / rawCost).toString() : '0',
+    unrealized_intraday_pl:   corrIntraday.toString(),  // split-corrected day P&L
+    avg_entry_price:          (parseFloat(p.avg_entry_price) / mult).toString(),
   };
 }
 
 function sortPositions(positions) {
   const sorted = [...positions];
+  const dir = sortDir[currentSort] === 'asc' ? 1 : -1;
+
   switch (currentSort) {
     case 'sym':
-      return sorted.sort((a,b) => a.symbol.localeCompare(b.symbol));
+      return sorted.sort((a, b) => dir * a.symbol.localeCompare(b.symbol));
     case 'size':
-      return sorted.sort((a,b) => Math.abs(parseFloat(b.market_value)) - Math.abs(parseFloat(a.market_value)));
-    case 'day_best':
-      return sorted.sort((a,b) => parseFloat(b.unrealized_intraday_plpc) - parseFloat(a.unrealized_intraday_plpc));
-    case 'day_worst':
-      return sorted.sort((a,b) => parseFloat(a.unrealized_intraday_plpc) - parseFloat(b.unrealized_intraday_plpc));
-    case 'gain':
-      return sorted.sort((a,b) => parseFloat(b.unrealized_pl) - parseFloat(a.unrealized_pl));
-    case 'loss':
-      return sorted.sort((a,b) => parseFloat(a.unrealized_pl) - parseFloat(b.unrealized_pl));
+      return sorted.sort((a, b) => dir * (Math.abs(parseFloat(a.market_value)) - Math.abs(parseFloat(b.market_value))));
+    case 'day':
+      return sorted.sort((a, b) => dir * (parseFloat(a.unrealized_intraday_pl) - parseFloat(b.unrealized_intraday_pl)));
+    case 'total':
+      return sorted.sort((a, b) => dir * (parseFloat(a.unrealized_pl) - parseFloat(b.unrealized_pl)));
     default:
       return sorted;
   }
@@ -1609,6 +1732,159 @@ function showOtError(msg) {
 // openDrawer is defined above in ORDER DRAWER section
 
 // ══════════════════════════════════════
+// RETURNS (YTD / ITD / benchmark) — ported from desktop
+// ══════════════════════════════════════
+let benchCache = null;  // { ts, spyYTD, qqqYTD, spyITD, qqqITD }
+const BENCH_TTL = 15 * 60 * 1000;  // 15 min
+
+// Auto-log a daily equity snapshot so the log stays current from mobile too.
+// Only adds an entry if one doesn't already exist for today (avoids clobbering
+// the desktop's richer 'manual' snapshots — mobile uses source 'auto-mobile').
+function autoLogDaily(eqRaw, cashRaw, investedRaw) {
+  try {
+    const td = new Date().toISOString().split('T')[0];
+    if (dailyLog.some(e => e.date === td)) return;  // already logged today
+    const snap = {
+      date: td,
+      timestamp: new Date().toISOString(),
+      equity:   md(eqRaw),
+      cash:     md(cashRaw),
+      invested: md(investedRaw),
+      positions: cachedPositions.length,
+      source: 'auto-mobile',
+    };
+    dailyLog.push(snap);
+    dailyLog.sort((a, b) => b.date.localeCompare(a.date));
+    if (ACTIVE_ID) localStorage.setItem(`pp_${ACTIVE_ID}_daily_log`, JSON.stringify(dailyLog));
+  } catch {}
+}
+
+function setRetChip(id, val) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (val == null || isNaN(val)) { el.textContent = '—'; el.className = 'rc-val'; return; }
+  el.textContent = (val >= 0 ? '+' : '') + val.toFixed(1) + '%';
+  el.className = 'rc-val ' + (val >= 0 ? 'pos' : 'neg');
+}
+
+async function renderHeroReturns(currentEqRaw) {
+  const sorted = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
+  const today  = new Date().toISOString().split('T')[0];
+  const liveLog = sorted.slice();
+  // Daily log stores equity at DISPLAY scale (md); match that for today's live point
+  if (!liveLog.length || liveLog[liveLog.length - 1].date !== today) {
+    liveLog.push({ date: today, equity: md(currentEqRaw) });
+  }
+
+  const ytdStart   = ytdStartDate();
+  const ytdEntries = liveLog.filter(e => e.date >= ytdStart);
+  const portYTD    = portReturnOverLog(ytdEntries);
+  const portITD    = portReturnOverLog(liveLog);
+
+  setRetChip('hero-ytd', portYTD);
+  setRetChip('hero-itd', portITD);
+
+  const now = Date.now();
+  if (benchCache && (now - benchCache.ts) < BENCH_TTL) {
+    const alpha = (portYTD != null && benchCache.spyYTD != null) ? portYTD - benchCache.spyYTD : null;
+    setRetChip('hero-ytd-spy', alpha);
+    return;
+  }
+  try {
+    const itdStart = getInceptionDate();
+    const [spyYTD, qqqYTD, spyITD, qqqITD] = await Promise.all([
+      fetchBenchmarkReturn('SPY', ytdStart, today),
+      fetchBenchmarkReturn('QQQ', ytdStart, today),
+      itdStart !== ytdStart ? fetchBenchmarkReturn('SPY', itdStart, today) : Promise.resolve(null),
+      itdStart !== ytdStart ? fetchBenchmarkReturn('QQQ', itdStart, today) : Promise.resolve(null),
+    ]);
+    benchCache = { ts: now, spyYTD, qqqYTD, spyITD, qqqITD };
+    const alpha = (portYTD != null && spyYTD != null) ? portYTD - spyYTD : null;
+    setRetChip('hero-ytd-spy', alpha);
+  } catch {
+    setRetChip('hero-ytd-spy', null);
+  }
+}
+
+async function renderReturnsAnalytics() {
+  const sorted = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
+  const today  = new Date().toISOString().split('T')[0];
+  const liveLog = sorted.slice();
+  if (cachedEquity && (!liveLog.length || liveLog[liveLog.length - 1].date !== today)) {
+    // Daily log stores equity at DISPLAY scale (md); match it
+    liveLog.push({ date: today, equity: md(cachedEquity + getSplitEquityDelta(cachedPositions)) });
+  }
+
+  const ytdStart = ytdStartDate();
+  const itdStart = getInceptionDate();
+  const portYTD  = portReturnOverLog(liveLog.filter(e => e.date >= ytdStart));
+  const portITD  = portReturnOverLog(liveLog);
+
+  const note = document.getElementById('ret-note');
+  if (note) note.textContent = sorted.length
+    ? `${sorted.length} daily log entries`
+    : 'No daily log yet — log days on desktop to track returns';
+
+  const setCell = (id, v, bold) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (v == null || isNaN(v)) { el.textContent = '—'; el.style.color = 'var(--dim)'; return; }
+    el.textContent = (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+    el.style.color = v >= 0 ? 'var(--green)' : 'var(--red)';
+  };
+  setCell('ra-ytd-port', portYTD);
+  setCell('ra-itd-port', portITD);
+
+  // Monthly returns from the log
+  const monthMap = {};
+  sorted.forEach(e => { const mo = e.date.slice(0, 7); (monthMap[mo] ||= []).push(e); });
+  const months = Object.keys(monthMap).sort().reverse();
+  const monthlyEl = document.getElementById('ra-monthly');
+  if (monthlyEl) {
+    if (!months.length) {
+      monthlyEl.innerHTML = '<div style="padding:14px;text-align:center;color:var(--dim);font-size:12px">Need a few days of log data</div>';
+    } else {
+      const nowMo = today.slice(0, 7);
+      monthlyEl.innerHTML = months.map(mo => {
+        const ent = monthMap[mo];
+        const sv = ent[0].equity, ev = ent[ent.length - 1].equity;
+        const pct = sv ? (ev - sv) / sv * 100 : 0;
+        const [yr, mn] = mo.split('-');
+        const label = new Date(+yr, +mn - 1, 1).toLocaleString('en-US', { month: 'short', year: 'numeric' });
+        const partial = mo === nowMo;
+        return `<div class="comp-row">
+          <span class="comp-label" style="flex:1">${label}${partial ? ' <span style="font-size:9px;color:var(--amber)">(partial)</span>' : ''}</span>
+          <span style="font-weight:700;color:${pct>=0?'var(--green)':'var(--red)'}">${(pct>=0?'+':'')+pct.toFixed(1)}%</span>
+        </div>`;
+      }).join('');
+    }
+  }
+
+  // Benchmarks — reuse hero cache if fresh, else fetch
+  const now = Date.now();
+  let bench = (benchCache && (now - benchCache.ts) < BENCH_TTL) ? benchCache : null;
+  if (!bench) {
+    try {
+      const [spyYTD, qqqYTD, spyITD, qqqITD] = await Promise.all([
+        fetchBenchmarkReturn('SPY', ytdStart, today),
+        fetchBenchmarkReturn('QQQ', ytdStart, today),
+        itdStart !== ytdStart ? fetchBenchmarkReturn('SPY', itdStart, today) : Promise.resolve(null),
+        itdStart !== ytdStart ? fetchBenchmarkReturn('QQQ', itdStart, today) : Promise.resolve(null),
+      ]);
+      bench = benchCache = { ts: now, spyYTD, qqqYTD, spyITD, qqqITD };
+    } catch { bench = null; }
+  }
+  if (bench) {
+    setCell('ra-ytd-spy', bench.spyYTD);
+    setCell('ra-ytd-qqq', bench.qqqYTD);
+    setCell('ra-itd-spy', bench.spyITD != null ? bench.spyITD : bench.spyYTD);
+    setCell('ra-itd-qqq', bench.qqqITD != null ? bench.qqqITD : bench.qqqYTD);
+    setCell('ra-alpha-spy', (portYTD != null && bench.spyYTD != null) ? portYTD - bench.spyYTD : null);
+    setCell('ra-alpha-qqq', (portYTD != null && bench.qqqYTD != null) ? portYTD - bench.qqqYTD : null);
+  }
+}
+
+// ══════════════════════════════════════
 // ANALYTICS & COMPLIANCE (Part 5)
 // ══════════════════════════════════════
 
@@ -1729,7 +2005,7 @@ function switchTab(tab) {
   document.getElementById('positions-section').classList.toggle('hidden', tab !== 'positions');
   document.getElementById('analytics-screen').classList.toggle('visible', tab === 'analytics');
   // Render analytics on first open or refresh
-  if (tab === 'analytics') { renderAnalytics(); loadMobileRealizedPnL(); }
+  if (tab === 'analytics') { renderAnalytics(); loadMobileRealizedPnL(); renderReturnsAnalytics(); }
 }
 
 function renderAnalytics() {
