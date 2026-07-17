@@ -1073,12 +1073,51 @@ function portReturnOverLog(entries) {
   const start = entries[0].equity, end = entries[entries.length - 1].equity;
   return start > 0 ? (end - start) / start * 100 : null;
 }
+
+// Returns the ACTUAL baseline entry used for YTD, so the benchmark can be measured
+// from the exact same date. The true YTD baseline is the last log entry of the
+// PRIOR year (year-end close). If the account started this year, it's the first entry.
+function getYTDBaseline() {
+  const sorted = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
+  if (!sorted.length) return null;
+  const jan1 = new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0];
+  // Last entry strictly before Jan 1 = prior-year close (the correct baseline)
+  const priorYear = sorted.filter(e => e.date < jan1);
+  if (priorYear.length) return priorYear[priorYear.length - 1];
+  // Otherwise account started this year → first entry is the baseline
+  return sorted[0];
+}
+
+// Portfolio YTD using the correct baseline; also exposes the start date used
+function portfolioYTD() {
+  const sorted = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
+  if (!sorted.length) return { pct: null, startDate: null };
+  const baseline = getYTDBaseline();
+  if (!baseline) return { pct: null, startDate: null };
+  const end = sorted[sorted.length - 1].equity;
+  const pct = baseline.equity > 0 ? (end - baseline.equity) / baseline.equity * 100 : null;
+  return { pct, startDate: baseline.date };
+}
 async function fetchBenchmarkReturn(sym, startDate, endDate) {
   try {
-    const data = await dapi(`/v2/stocks/${encodeURIComponent(sym)}/bars?timeframe=1Day&start=${startDate}&end=${endDate}&limit=300&feed=iex&adjustment=split`);
+    // Start a few days early so we can pick the bar closest to (but not after)
+    // the baseline date — handles weekends/holidays where the exact date has no bar.
+    const startD = new Date(startDate + 'T00:00:00Z');
+    startD.setUTCDate(startD.getUTCDate() - 5);
+    const fetchStart = startD.toISOString().split('T')[0];
+    const data = await dapi(`/v2/stocks/${encodeURIComponent(sym)}/bars?timeframe=1Day&start=${fetchStart}&end=${endDate}&limit=400&feed=iex&adjustment=split`);
     const bars = data?.bars;
     if (!bars || bars.length < 2) return null;
-    const base = bars[0].c, last = bars[bars.length - 1].c;
+    // Baseline bar = the last bar on or before startDate (the true period start)
+    let baseBar = null;
+    for (const b of bars) {
+      const bDate = b.t.split('T')[0];
+      if (bDate <= startDate) baseBar = b;
+      else break;
+    }
+    // If nothing on/before startDate (account older than data), use first bar
+    const base = (baseBar || bars[0]).c;
+    const last = bars[bars.length - 1].c;
     return base > 0 ? (last - base) / base * 100 : null;
   } catch { return null; }
 }
@@ -1770,36 +1809,43 @@ function setRetChip(id, val) {
 async function renderHeroReturns(currentEqRaw) {
   const sorted = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
   const today  = new Date().toISOString().split('T')[0];
-  const liveLog = sorted.slice();
-  // Daily log stores equity at DISPLAY scale (md); match that for today's live point
-  if (!liveLog.length || liveLog[liveLog.length - 1].date !== today) {
-    liveLog.push({ date: today, equity: md(currentEqRaw) });
+
+  // Ensure today's live equity is represented (daily log stores DISPLAY scale)
+  const workLog = sorted.slice();
+  if (!workLog.length || workLog[workLog.length - 1].date !== today) {
+    workLog.push({ date: today, equity: md(currentEqRaw) });
   }
+  // Temporarily use workLog for baseline math
+  const savedLog = dailyLog;
+  dailyLog = workLog;
+  const ytd = portfolioYTD();
+  const itdBaseline = workLog[0];
+  const portITD = (itdBaseline && itdBaseline.equity > 0)
+    ? (workLog[workLog.length - 1].equity - itdBaseline.equity) / itdBaseline.equity * 100
+    : null;
+  dailyLog = savedLog;
 
-  const ytdStart   = ytdStartDate();
-  const ytdEntries = liveLog.filter(e => e.date >= ytdStart);
-  const portYTD    = portReturnOverLog(ytdEntries);
-  const portITD    = portReturnOverLog(liveLog);
-
-  setRetChip('hero-ytd', portYTD);
+  setRetChip('hero-ytd', ytd.pct);
   setRetChip('hero-itd', portITD);
 
+  // Benchmark measured from the SAME date as the portfolio baseline
+  const ytdStart = ytd.startDate || new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0];
   const now = Date.now();
-  if (benchCache && (now - benchCache.ts) < BENCH_TTL) {
-    const alpha = (portYTD != null && benchCache.spyYTD != null) ? portYTD - benchCache.spyYTD : null;
+  if (benchCache && (now - benchCache.ts) < BENCH_TTL && benchCache.ytdStart === ytdStart) {
+    const alpha = (ytd.pct != null && benchCache.spyYTD != null) ? ytd.pct - benchCache.spyYTD : null;
     setRetChip('hero-ytd-spy', alpha);
     return;
   }
   try {
-    const itdStart = getInceptionDate();
+    const itdStart = ytd.startDate && workLog.length ? workLog[0].date : ytdStart;
     const [spyYTD, qqqYTD, spyITD, qqqITD] = await Promise.all([
       fetchBenchmarkReturn('SPY', ytdStart, today),
       fetchBenchmarkReturn('QQQ', ytdStart, today),
       itdStart !== ytdStart ? fetchBenchmarkReturn('SPY', itdStart, today) : Promise.resolve(null),
       itdStart !== ytdStart ? fetchBenchmarkReturn('QQQ', itdStart, today) : Promise.resolve(null),
     ]);
-    benchCache = { ts: now, spyYTD, qqqYTD, spyITD, qqqITD };
-    const alpha = (portYTD != null && spyYTD != null) ? portYTD - spyYTD : null;
+    benchCache = { ts: now, ytdStart, itdStart, spyYTD, qqqYTD, spyITD, qqqITD };
+    const alpha = (ytd.pct != null && spyYTD != null) ? ytd.pct - spyYTD : null;
     setRetChip('hero-ytd-spy', alpha);
   } catch {
     setRetChip('hero-ytd-spy', null);
@@ -1809,33 +1855,42 @@ async function renderHeroReturns(currentEqRaw) {
 async function renderReturnsAnalytics() {
   const sorted = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
   const today  = new Date().toISOString().split('T')[0];
-  const liveLog = sorted.slice();
-  if (cachedEquity && (!liveLog.length || liveLog[liveLog.length - 1].date !== today)) {
-    // Daily log stores equity at DISPLAY scale (md); match it
-    liveLog.push({ date: today, equity: md(cachedEquity + getSplitEquityDelta(cachedPositions)) });
+
+  const workLog = sorted.slice();
+  if (cachedEquity && (!workLog.length || workLog[workLog.length - 1].date !== today)) {
+    workLog.push({ date: today, equity: md(cachedEquity + getSplitEquityDelta(cachedPositions)) });
   }
 
-  const ytdStart = ytdStartDate();
-  const itdStart = getInceptionDate();
-  const portYTD  = portReturnOverLog(liveLog.filter(e => e.date >= ytdStart));
-  const portITD  = portReturnOverLog(liveLog);
+  // Portfolio YTD + ITD using consistent baselines
+  const savedLog = dailyLog;
+  dailyLog = workLog;
+  const ytd = portfolioYTD();
+  dailyLog = savedLog;
+
+  const itdBaseline = workLog[0];
+  const portITD = (itdBaseline && itdBaseline.equity > 0)
+    ? (workLog[workLog.length - 1].equity - itdBaseline.equity) / itdBaseline.equity * 100
+    : null;
+
+  const ytdStart = ytd.startDate || new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0];
+  const itdStart = workLog.length ? workLog[0].date : ytdStart;
 
   const note = document.getElementById('ret-note');
   if (note) note.textContent = sorted.length
-    ? `${sorted.length} daily log entries`
-    : 'No daily log yet — log days on desktop to track returns';
+    ? `${sorted.length} daily log entries · since ${ytdStart}`
+    : 'No daily log yet — returns need day history';
 
-  const setCell = (id, v, bold) => {
+  const setCell = (id, v) => {
     const el = document.getElementById(id);
     if (!el) return;
     if (v == null || isNaN(v)) { el.textContent = '—'; el.style.color = 'var(--dim)'; return; }
     el.textContent = (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
     el.style.color = v >= 0 ? 'var(--green)' : 'var(--red)';
   };
-  setCell('ra-ytd-port', portYTD);
+  setCell('ra-ytd-port', ytd.pct);
   setCell('ra-itd-port', portITD);
 
-  // Monthly returns from the log
+  // Monthly returns
   const monthMap = {};
   sorted.forEach(e => { const mo = e.date.slice(0, 7); (monthMap[mo] ||= []).push(e); });
   const months = Object.keys(monthMap).sort().reverse();
@@ -1860,9 +1915,9 @@ async function renderReturnsAnalytics() {
     }
   }
 
-  // Benchmarks — reuse hero cache if fresh, else fetch
+  // Benchmarks measured from the SAME dates as portfolio
   const now = Date.now();
-  let bench = (benchCache && (now - benchCache.ts) < BENCH_TTL) ? benchCache : null;
+  let bench = (benchCache && (now - benchCache.ts) < BENCH_TTL && benchCache.ytdStart === ytdStart) ? benchCache : null;
   if (!bench) {
     try {
       const [spyYTD, qqqYTD, spyITD, qqqITD] = await Promise.all([
@@ -1871,7 +1926,7 @@ async function renderReturnsAnalytics() {
         itdStart !== ytdStart ? fetchBenchmarkReturn('SPY', itdStart, today) : Promise.resolve(null),
         itdStart !== ytdStart ? fetchBenchmarkReturn('QQQ', itdStart, today) : Promise.resolve(null),
       ]);
-      bench = benchCache = { ts: now, spyYTD, qqqYTD, spyITD, qqqITD };
+      bench = benchCache = { ts: now, ytdStart, itdStart, spyYTD, qqqYTD, spyITD, qqqITD };
     } catch { bench = null; }
   }
   if (bench) {
@@ -1879,8 +1934,8 @@ async function renderReturnsAnalytics() {
     setCell('ra-ytd-qqq', bench.qqqYTD);
     setCell('ra-itd-spy', bench.spyITD != null ? bench.spyITD : bench.spyYTD);
     setCell('ra-itd-qqq', bench.qqqITD != null ? bench.qqqITD : bench.qqqYTD);
-    setCell('ra-alpha-spy', (portYTD != null && bench.spyYTD != null) ? portYTD - bench.spyYTD : null);
-    setCell('ra-alpha-qqq', (portYTD != null && bench.qqqYTD != null) ? portYTD - bench.qqqYTD : null);
+    setCell('ra-alpha-spy', (ytd.pct != null && bench.spyYTD != null) ? ytd.pct - bench.spyYTD : null);
+    setCell('ra-alpha-qqq', (ytd.pct != null && bench.qqqYTD != null) ? ytd.pct - bench.qqqYTD : null);
   }
 }
 
