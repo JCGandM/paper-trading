@@ -1100,22 +1100,16 @@ function portfolioYTD() {
 }
 async function fetchBenchmarkReturn(sym, startDate, endDate) {
   try {
-    // Start a few days early so we can pick the bar closest to (but not after)
-    // the baseline date — handles weekends/holidays where the exact date has no bar.
-    const startD = new Date(startDate + 'T00:00:00Z');
-    startD.setUTCDate(startD.getUTCDate() - 5);
-    const fetchStart = startD.toISOString().split('T')[0];
+    const sd = new Date(startDate + 'T00:00:00Z');
+    sd.setUTCDate(sd.getUTCDate() - 5);
+    const fetchStart = sd.toISOString().split('T')[0];
     const data = await dapi(`/v2/stocks/${encodeURIComponent(sym)}/bars?timeframe=1Day&start=${fetchStart}&end=${endDate}&limit=400&feed=iex&adjustment=split`);
     const bars = data?.bars;
     if (!bars || bars.length < 2) return null;
-    // Baseline bar = the last bar on or before startDate (the true period start)
     let baseBar = null;
     for (const b of bars) {
-      const bDate = b.t.split('T')[0];
-      if (bDate <= startDate) baseBar = b;
-      else break;
+      if (b.t.split('T')[0] <= startDate) baseBar = b; else break;
     }
-    // If nothing on/before startDate (account older than data), use first bar
     const base = (baseBar || bars[0]).c;
     const last = bars[bars.length - 1].c;
     return base > 0 ? (last - base) / base * 100 : null;
@@ -1806,29 +1800,50 @@ function setRetChip(id, val) {
   el.className = 'rc-val ' + (val >= 0 ? 'pos' : 'neg');
 }
 
-async function renderHeroReturns(currentEqRaw) {
-  const sorted = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
-  const today  = new Date().toISOString().split('T')[0];
+// Portfolio % return from Alpaca's authoritative history API (matches desktop).
+// period: 'YTD' or '1A'. Returns { pct, startDate }.
+async function mobilePortfolioReturn(period) {
+  try {
+    let url;
+    if (period === 'YTD') {
+      const start = ytdStartDate();
+      url = `/v2/account/portfolio/history?start=${start}T00:00:00Z&timeframe=1D&extended_hours=false`;
+    } else {
+      url = `/v2/account/portfolio/history?period=1A&timeframe=1D&extended_hours=false`;
+    }
+    const hist = await tapi(url);
+    if (!hist?.timestamp?.length) return { pct: null, startDate: null };
 
-  // Ensure today's live equity is represented (daily log stores DISPLAY scale)
-  const workLog = sorted.slice();
-  if (!workLog.length || workLog[workLog.length - 1].date !== today) {
-    workLog.push({ date: today, equity: md(currentEqRaw) });
+    const pts = hist.timestamp
+      .map((t, i) => ({ t, e: hist.equity[i] }))
+      .filter(p => p.e != null && p.e > 0);
+    if (pts.length < 2) return { pct: null, startDate: null };
+
+    // Pin the last point to current split-corrected equity for an accurate "today"
+    const currentCorrected = cachedEquity + getSplitEquityDelta(cachedPositions);
+    const base = pts[0].e;
+    const end  = currentCorrected > 0 ? currentCorrected : pts[pts.length - 1].e;
+    const pct  = base > 0 ? (end - base) / base * 100 : null;
+    const startDate = new Date(pts[0].t * 1000).toISOString().split('T')[0];
+    return { pct, startDate };
+  } catch {
+    return { pct: null, startDate: null };
   }
-  // Temporarily use workLog for baseline math
-  const savedLog = dailyLog;
-  dailyLog = workLog;
-  const ytd = portfolioYTD();
-  const itdBaseline = workLog[0];
-  const portITD = (itdBaseline && itdBaseline.equity > 0)
-    ? (workLog[workLog.length - 1].equity - itdBaseline.equity) / itdBaseline.equity * 100
-    : null;
-  dailyLog = savedLog;
+}
+
+async function renderHeroReturns(currentEqRaw) {
+  const today = new Date().toISOString().split('T')[0];
+
+  // Portfolio YTD + ITD from Alpaca's authoritative history (matches desktop chart)
+  const [ytd, itd] = await Promise.all([
+    mobilePortfolioReturn('YTD'),
+    mobilePortfolioReturn('1A'),
+  ]);
 
   setRetChip('hero-ytd', ytd.pct);
-  setRetChip('hero-itd', portITD);
+  setRetChip('hero-itd', itd.pct);
 
-  // Benchmark measured from the SAME date as the portfolio baseline
+  // Benchmark measured from the SAME date as the portfolio series start
   const ytdStart = ytd.startDate || new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0];
   const now = Date.now();
   if (benchCache && (now - benchCache.ts) < BENCH_TTL && benchCache.ytdStart === ytdStart) {
@@ -1837,7 +1852,7 @@ async function renderHeroReturns(currentEqRaw) {
     return;
   }
   try {
-    const itdStart = ytd.startDate && workLog.length ? workLog[0].date : ytdStart;
+    const itdStart = itd.startDate || ytdStart;
     const [spyYTD, qqqYTD, spyITD, qqqITD] = await Promise.all([
       fetchBenchmarkReturn('SPY', ytdStart, today),
       fetchBenchmarkReturn('QQQ', ytdStart, today),
@@ -1856,29 +1871,18 @@ async function renderReturnsAnalytics() {
   const sorted = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
   const today  = new Date().toISOString().split('T')[0];
 
-  const workLog = sorted.slice();
-  if (cachedEquity && (!workLog.length || workLog[workLog.length - 1].date !== today)) {
-    workLog.push({ date: today, equity: md(cachedEquity + getSplitEquityDelta(cachedPositions)) });
-  }
-
-  // Portfolio YTD + ITD using consistent baselines
-  const savedLog = dailyLog;
-  dailyLog = workLog;
-  const ytd = portfolioYTD();
-  dailyLog = savedLog;
-
-  const itdBaseline = workLog[0];
-  const portITD = (itdBaseline && itdBaseline.equity > 0)
-    ? (workLog[workLog.length - 1].equity - itdBaseline.equity) / itdBaseline.equity * 100
-    : null;
-
+  // Portfolio YTD + ITD from Alpaca's authoritative history (matches desktop)
+  const [ytd, itd] = await Promise.all([
+    mobilePortfolioReturn('YTD'),
+    mobilePortfolioReturn('1A'),
+  ]);
   const ytdStart = ytd.startDate || new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0];
-  const itdStart = workLog.length ? workLog[0].date : ytdStart;
+  const itdStart = itd.startDate || ytdStart;
 
   const note = document.getElementById('ret-note');
-  if (note) note.textContent = sorted.length
-    ? `${sorted.length} daily log entries · since ${ytdStart}`
-    : 'No daily log yet — returns need day history';
+  if (note) note.textContent = ytd.startDate
+    ? `Alpaca portfolio history · since ${ytdStart}`
+    : 'Portfolio history unavailable';
 
   const setCell = (id, v) => {
     const el = document.getElementById(id);
@@ -1888,9 +1892,9 @@ async function renderReturnsAnalytics() {
     el.style.color = v >= 0 ? 'var(--green)' : 'var(--red)';
   };
   setCell('ra-ytd-port', ytd.pct);
-  setCell('ra-itd-port', portITD);
+  setCell('ra-itd-port', itd.pct);
 
-  // Monthly returns
+  // Monthly returns (from daily log — display only)
   const monthMap = {};
   sorted.forEach(e => { const mo = e.date.slice(0, 7); (monthMap[mo] ||= []).push(e); });
   const months = Object.keys(monthMap).sort().reverse();
@@ -1915,7 +1919,7 @@ async function renderReturnsAnalytics() {
     }
   }
 
-  // Benchmarks measured from the SAME dates as portfolio
+  // Benchmarks aligned to the same start dates
   const now = Date.now();
   let bench = (benchCache && (now - benchCache.ts) < BENCH_TTL && benchCache.ytdStart === ytdStart) ? benchCache : null;
   if (!bench) {
