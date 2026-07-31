@@ -2554,13 +2554,13 @@ async function loadChart(period) {
 
     const startDate = new Date(rawPts[0].t * 1000).toISOString().split('T')[0];
 
-    // ── Step 4: Fetch benchmarks in parallel ──
+    // ── Step 4: Fetch benchmarks aligned to the portfolio's timestamps ──
     const [spyPcts, qqqPcts] = await Promise.all([
       document.getElementById('spy-chk').checked
-        ? fetchBenchmarkCached('SPY', startDate, tf, rawPts.length)
+        ? fetchBenchmarkAligned('SPY', timestamps, tf)
         : Promise.resolve(null),
       document.getElementById('qqq-chk').checked
-        ? fetchBenchmarkCached('QQQ', startDate, tf, rawPts.length)
+        ? fetchBenchmarkAligned('QQQ', timestamps, tf)
         : Promise.resolve(null)
     ]);
 
@@ -2578,11 +2578,11 @@ async function loadChart(period) {
       : '';
 
     statsEl.innerHTML = `
-      <div class="cs"><div class="cs-lbl">Period Return</div><div class="cs-val ${cls(lastPL)}">${pp2(lastPL)}</div></div>
+      <div class="cs"><div class="cs-lbl">Period Return (${period})</div><div class="cs-val ${cls(lastPL)}">${pp2(lastPL)}</div></div>
       <div class="cs"><div class="cs-lbl">Start Value</div><div class="cs-val">${$$(md(baseEquity))}</div></div>
       <div class="cs"><div class="cs-lbl">Current Value</div><div class="cs-val">${$$(md(currentCorrected))}</div></div>
-      ${spyLast  != null ? `<div class="cs"><div class="cs-lbl">SPY Return</div><div class="cs-val ${cls(spyLast)}">${pp2(spyLast)}</div></div>` : ''}
-      ${qqqLast  != null ? `<div class="cs"><div class="cs-lbl">QQQ Return</div><div class="cs-val ${cls(qqqLast)}">${pp2(qqqLast)}</div></div>` : ''}
+      ${spyLast  != null ? `<div class="cs"><div class="cs-lbl">SPY (${period})</div><div class="cs-val ${cls(spyLast)}">${pp2(spyLast)}</div></div>` : ''}
+      ${qqqLast  != null ? `<div class="cs"><div class="cs-lbl">QQQ (${period})</div><div class="cs-val ${cls(qqqLast)}">${pp2(qqqLast)}</div></div>` : ''}
       ${spyAlpha != null ? `<div class="cs"><div class="cs-lbl">Alpha vs SPY</div><div class="cs-val ${cls(spyAlpha)}">${pp2(spyAlpha)}</div></div>` : ''}
       ${qqqAlpha != null ? `<div class="cs"><div class="cs-lbl">Alpha vs QQQ</div><div class="cs-val ${cls(qqqAlpha)}">${pp2(qqqAlpha)}</div></div>` : ''}
       ${splitNote}
@@ -2596,23 +2596,54 @@ async function loadChart(period) {
   }
 }
 
-async function fetchBenchmarkCached(sym, startDate, tf, maxPts) {
-  const key = `${sym}_${tf}_${startDate}`;
-  const now  = Date.now();
+// Fetch a benchmark and align it to the portfolio's timestamps by DATE.
+// Returns an array the same length as `portTimestamps`, where each entry is the
+// benchmark's % return (from its first bar) as of that portfolio point's date.
+// This guarantees the plotted line and the end-of-series stat agree.
+async function fetchBenchmarkAligned(sym, portTimestamps, tf) {
+  const startDate = new Date(portTimestamps[0] * 1000).toISOString().split('T')[0];
+  const key = `${sym}_${tf}_${startDate}_aligned`;
+  const now = Date.now();
   const cached = benchCache[key];
-  // Use cache if fresh and has enough points
-  if (cached && (now - cached.ts) < BENCH_TTL && cached.pcts.length >= Math.min(maxPts, cached.pcts.length)) {
-    return cached.pcts;
-  }
+  if (cached && (now - cached.ts) < BENCH_TTL) return cached.series;
+
   try {
-    const atf  = dataTF[tf] || '1Day';
-    const data  = await dapi(`/v2/stocks/${sym}/bars?timeframe=${atf}&start=${startDate}&limit=${maxPts}&feed=iex&adjustment=split`);
-    const bars  = data?.bars;
+    const atf = dataTF[tf] || '1Day';
+    // Fetch generously; align by date afterward
+    const data = await dapi(`/v2/stocks/${sym}/bars?timeframe=${atf}&start=${startDate}&limit=1000&feed=iex&adjustment=split`);
+    const bars = data?.bars;
     if (!bars || bars.length < 2) return null;
-    const base  = bars[0].c;
-    const pcts  = bars.map(b => parseFloat(((b.c - base) / base * 100).toFixed(3)));
-    benchCache[key] = { pcts, ts: now };
-    return pcts;
+
+    const base = bars[0].c;
+    // Build a date/time → cumulative-return lookup from the benchmark bars
+    const isIntraday = atf !== '1Day';
+    const benchByKey = new Map();
+    for (const b of bars) {
+      const d = new Date(b.t);
+      const k = isIntraday
+        ? d.toISOString().slice(0, 13)          // align to the hour for intraday
+        : d.toISOString().slice(0, 10);         // align to the day for daily
+      benchByKey.set(k, (b.c - base) / base * 100);
+    }
+
+    // For each portfolio timestamp, find the benchmark return at the same date/hour.
+    // Carry forward the last known value if a bar is missing (holiday/gap).
+    let lastVal = 0;
+    const series = portTimestamps.map(ts => {
+      const d = new Date(ts * 1000);
+      const k = isIntraday ? d.toISOString().slice(0, 13) : d.toISOString().slice(0, 10);
+      if (benchByKey.has(k)) lastVal = benchByKey.get(k);
+      else {
+        // find nearest prior bar key
+        for (const [bk, bv] of benchByKey) {
+          if (bk <= k) lastVal = bv; else break;
+        }
+      }
+      return parseFloat(lastVal.toFixed(3));
+    });
+
+    benchCache[key] = { series, ts: now };
+    return series;
   } catch { return null; }
 }
 
@@ -2630,10 +2661,11 @@ function drawChart(labels, equity, plPcts, spyPcts, qqqPcts) {
 
   const addBench = (pcts, label, color) => {
     if (!pcts?.length) return;
-    const al = [...pcts];
-    while (al.length < labels.length) al.push(al[al.length-1] ?? 0);
+    // Series is already date-aligned to `labels`; use as-is (guard length just in case)
+    const al = pcts.slice(0, labels.length);
+    while (al.length < labels.length) al.push(al[al.length - 1] ?? 0);
     datasets.push({
-      label, data: al.slice(0, labels.length),
+      label, data: al,
       borderColor: color, backgroundColor: 'transparent',
       fill: false, tension: 0.2, pointRadius: 0,
       borderWidth: 1.5, borderDash: [5, 3], pointHoverRadius: 5
