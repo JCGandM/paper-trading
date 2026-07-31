@@ -1224,6 +1224,62 @@ function scheduleNextRefresh() {
 }
 
 let fullRefreshCount = 0;
+let todayRealizedPL = 0;  // realized P&L from positions closed/trimmed today (real $, pre-md)
+
+// Compute realized P&L from today's sell fills using FIFO against recent buys.
+// Kept lightweight: only fetches today's activities, runs on full refreshes.
+async function computeTodayRealized() {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const fills = await tapi(`/v2/account/activities/FILL?date=${today}&page_size=100`);
+    if (!Array.isArray(fills) || !fills.length) { todayRealizedPL = 0; return; }
+
+    // Build FIFO buy lots from ALL fills (need history for cost basis), then
+    // only count realized from today's sells. Simplest correct approach: pull
+    // enough history. Here we approximate using avg cost from current positions
+    // for names still held, and fall back to same-day matching for day-trades.
+    // Group today's fills by symbol:
+    const bySym = {};
+    for (const f of fills) {
+      const s = f.symbol;
+      if (!bySym[s]) bySym[s] = [];
+      bySym[s].push({ side: f.side, qty: Math.abs(parseFloat(f.qty)), px: parseFloat(f.price), t: f.transaction_time });
+    }
+
+    let realized = 0;
+    for (const sym in bySym) {
+      const evs = bySym[sym].sort((a,b) => new Date(a.t) - new Date(b.t));
+      // FIFO within the day: match sells against buys made today; for sells of
+      // pre-existing shares, use the current position's avg entry as cost basis.
+      const lots = [];
+      const heldPos = positions.find(p => p.symbol === sym);
+      const priorEntry = heldPos ? parseFloat(getSplitAdjustedPosition(heldPos).avg_entry_price) : null;
+      for (const e of evs) {
+        if (e.side === 'buy') {
+          lots.push({ qty: e.qty, px: e.px });
+        } else {
+          let rem = e.qty;
+          while (rem > 0 && lots.length) {
+            const lot = lots[0];
+            const m = Math.min(rem, lot.qty);
+            realized += m * (e.px - lot.px);
+            lot.qty -= m; rem -= m;
+            if (lot.qty <= 1e-9) lots.shift();
+          }
+          // Sold more than bought today → came from prior holdings
+          if (rem > 0 && priorEntry != null) {
+            realized += rem * (e.px - priorEntry);
+          }
+        }
+      }
+    }
+    todayRealizedPL = realized;
+  } catch(e) {
+    // If we can't compute it, don't contaminate day P&L — leave at 0
+    todayRealizedPL = 0;
+  }
+}
+
 async function refresh() {
   try {
     document.getElementById('status-dot').className = 'status-dot';
@@ -1231,6 +1287,7 @@ async function refresh() {
     const doFull = (fullRefreshCount % 10 === 0) || !isMarketOpen();
     fullRefreshCount++;
     await Promise.all([loadAccount(), loadPositions(), loadOrders(doFull)]);
+    await computeTodayRealized();  // realized P&L from today's closed/trimmed positions
     renderPositions(); // re-render after account data confirmed loaded (fixes % of equity race)
     document.getElementById('status-dot').className = 'status-dot live';
     const mktLabel = isMarketOpen() ? '' : ' · mkt closed';
@@ -1263,7 +1320,17 @@ function renderAccount() {
   const lmv      = rawLmv + splitDelta;   // long_market_value is the source of the gap
   const invested = lmv + Math.abs(smv);
   const investedPct = pv ? (invested / pv * 100).toFixed(1) : 0;
-  const dpl      = eq - leq;              // day P&L — delta applied to both sides, so this is unaffected
+
+  // Day P&L: sum each position's split-corrected intraday P&L rather than using
+  // (equity − last_equity). The equity identity gets contaminated by the changing
+  // split correction and by intraday deposits/trades, which inflated the number.
+  // Summing per-position intraday P&L is what you get eyeballing the Day P&L column.
+  const unrealizedIntraday = positions.reduce((sum, rawP) => {
+    const ap = getSplitAdjustedPosition(rawP);
+    return sum + parseFloat(ap.unrealized_intraday_pl || 0);
+  }, 0);
+  // Add realized P&L from positions closed/trimmed today (not in current positions)
+  const dpl      = unrealizedIntraday + (todayRealizedPL || 0);
   const dplPct   = leq ? (dpl / leq * 100) : 0;
 
   document.getElementById('v-pv').textContent   = $$(md(pv));
@@ -3957,6 +4024,12 @@ function getSplitAdjustedPosition(p) {
   const corrPL     = corrMV - rawCost;
   const corrPLpct  = rawCost !== 0 ? corrPL / rawCost : 0;
 
+  // Intraday P&L IS affected by the split: Alpaca computes it on pre-split qty,
+  // so the dollar amount is understated by `mult`. The PERCENTAGE is unaffected
+  // (it's per-share relative change), so we scale the $ by mult and keep the %.
+  const rawIntradayPL  = parseFloat(p.unrealized_intraday_pl || 0);
+  const corrIntradayPL = rawIntradayPL * mult;
+
   return {
     ...p,
     _splitMult:       mult,
@@ -3968,7 +4041,8 @@ function getSplitAdjustedPosition(p) {
     cost_basis:       rawCost.toFixed(6),   // unchanged — correct dollar amount paid
     unrealized_pl:    corrPL.toFixed(6),
     unrealized_plpc:  corrPLpct.toFixed(8),
-    // intraday P&L and change_today: left unchanged (already correct)
+    unrealized_intraday_pl:   corrIntradayPL.toFixed(6),  // scaled by split mult
+    // unrealized_intraday_plpc: left unchanged — percentage is already correct
   };
 }
 
@@ -4069,29 +4143,22 @@ const RETURNS_TTL = 15 * 60 * 1000; // 15 min
 async function renderReturnsTab() {
   const sortedLog = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
 
-  // ── Portfolio returns from daily log ──────────────────
-  const thisYear    = new Date().getFullYear();
-  const ytdStart    = ytdStartDate();    // uses inception date if account started mid-year
-  const itdStart    = getInceptionDate();
+  // ── Portfolio returns from Alpaca's authoritative history (matches the chart) ──
   const today       = new Date().toISOString().split('T')[0];
-
-  const ytdEntries  = sortedLog.filter(e => e.date >= ytdStart);
-  const itdEntries  = sortedLog;
-
-  // Compute portfolio return over a set of log entries
-  function portReturn(entries) {
-    if (entries.length < 1) return null;
-    const start = entries[0].equity;
-    const end   = entries[entries.length - 1].equity;
-    return start > 0 ? (end - start) / start * 100 : null;
-  }
-
-  const portYTD = portReturn(ytdEntries);
-  const portITD = portReturn(itdEntries);
+  const [ytdResult, itdResult] = await Promise.all([
+    portfolioReturnFromHistory('YTD'),
+    portfolioReturnFromHistory('1A'),   // 1-year history as ITD proxy (full available range)
+  ]);
+  const portYTD = ytdResult.pct;
+  const portITD = itdResult.pct;
+  // Benchmark start dates aligned to the ACTUAL first date of each portfolio series,
+  // so portfolio and index cover the identical window (this was the bug).
+  const ytdStart = ytdResult.startDate || ytdStartDate();
+  const itdStart = itdResult.startDate || getInceptionDate();
 
   // Update note
   document.getElementById('ret-note').textContent =
-    `Portfolio data from ${sortedLog.length} daily log entries · Benchmark data from Alpaca IEX · Refreshes every 15 min`;
+    `Returns from Alpaca portfolio history (split-adjusted) · Benchmarks from Alpaca IEX · Cached 15 min`;
   document.getElementById('ret-days').textContent = sortedLog.length;
   document.getElementById('ret-itd-label').textContent =
     `Inception-to-Date — Portfolio${itdStart !== ytdStart ? ` (since ${itdStart})` : ' (since inception)'}`;
@@ -4157,7 +4224,8 @@ async function renderReturnsTab() {
   setReturnKPI('ret-itd-port', portITD);
 
   const now_ts = Date.now();
-  if (returnsCache && (now_ts - returnsCache.ts) < RETURNS_TTL) {
+  if (returnsCache && (now_ts - returnsCache.ts) < RETURNS_TTL
+      && returnsCache.ytdStart === ytdStart && returnsCache.itdStart === itdStart) {
     applyBenchmarkKPIs(returnsCache, portYTD, portITD);
     return;
   }
@@ -4171,6 +4239,7 @@ async function renderReturnsTab() {
   ]);
 
   returnsCache = {
+    ytdStart, itdStart,
     spyYTD,
     qqqYTD,
     spyITD: itdStart !== ytdStart ? spyITD : spyYTD,
@@ -4180,15 +4249,57 @@ async function renderReturnsTab() {
   applyBenchmarkKPIs(returnsCache, portYTD, portITD);
 }
 
+// Compute portfolio % return over a period using Alpaca's authoritative
+// portfolio-history API (the SAME source the chart uses), split-corrected.
+// Returns { pct, startDate } so the benchmark can be aligned to the same start.
+async function portfolioReturnFromHistory(period) {
+  try {
+    const tf = periodTF[period] || '1D';
+    const hist = await tapi(historyUrl(period, tf));
+    if (!hist?.timestamp?.length) return { pct: null, startDate: null };
+
+    const rawPts = hist.timestamp
+      .map((t, i) => ({ t, e: hist.equity[i] }))
+      .filter(p => p.e != null && p.e > 0);
+    if (rawPts.length < 2) return { pct: null, startDate: null };
+
+    const timestamps  = rawPts.map(p => p.t);
+    const rawEquities = rawPts.map(p => p.e);
+
+    // Split-correct the series exactly like the chart does
+    const corrected = await applySplitCorrectionsToEquitySeries(timestamps, rawEquities, tf);
+    // Pin last point to current corrected equity so today is accurate
+    const currentCorrected = account._correctedEquity || (parseFloat(account.equity || 0) + getSplitEquityDelta());
+    corrected[corrected.length - 1] = currentCorrected;
+
+    const base = corrected.find(e => e > 0) || corrected[0];
+    const end  = corrected[corrected.length - 1];
+    const pct  = base > 0 ? (end - base) / base * 100 : null;
+    const startDate = new Date(rawPts[0].t * 1000).toISOString().split('T')[0];
+    return { pct, startDate };
+  } catch {
+    return { pct: null, startDate: null };
+  }
+}
+
 // Fetch the simple % return for a symbol between two dates (1 API call)
 async function fetchBenchmarkReturn(sym, startDate, endDate) {
   try {
+    // Reach back a few days so a weekend/holiday start still has a bar
+    const sd = new Date(startDate + 'T00:00:00Z');
+    sd.setUTCDate(sd.getUTCDate() - 5);
+    const fetchStart = sd.toISOString().split('T')[0];
     const data = await dapi(
-      `/v2/stocks/${encodeURIComponent(sym)}/bars?timeframe=1Day&start=${startDate}&end=${endDate}&limit=300&feed=iex&adjustment=split`
+      `/v2/stocks/${encodeURIComponent(sym)}/bars?timeframe=1Day&start=${fetchStart}&end=${endDate}&limit=400&feed=iex&adjustment=split`
     );
     const bars = data?.bars;
     if (!bars || bars.length < 2) return null;
-    const base = bars[0].c;
+    // Base = last bar on or before the true start date
+    let baseBar = null;
+    for (const b of bars) {
+      if (b.t.split('T')[0] <= startDate) baseBar = b; else break;
+    }
+    const base = (baseBar || bars[0]).c;
     const last = bars[bars.length - 1].c;
     return base > 0 ? (last - base) / base * 100 : null;
   } catch { return null; }
