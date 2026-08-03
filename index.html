@@ -2907,6 +2907,22 @@ async function exportExcel() {
   function hdr(v) {
     return s(v, { font: { bold: true, color: { rgb: C.white }, sz: 9 }, fill: { fgColor: { rgb: C.navy } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: { bottom: { style: 'thin', color: { rgb: C.white } } } });
   }
+  function hdr10(v) {
+    return s(v, { font: { bold: true, color: { rgb: C.white }, sz: 10 }, fill: { fgColor: { rgb: C.navy } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: { bottom: { style: 'thin', color: { rgb: C.white } } } });
+  }
+  // Formula cell rendered as a percentage (used for Alpha = portfolio − benchmark)
+  function formulaPct(f) {
+    return { t: 'n', f: f, z: '0.00%',
+             s: { font: { bold: true }, alignment: { horizontal: 'right' } } };
+  }
+  function corrCell(v) {
+    if (v == null || isNaN(v)) return tx('—');
+    return s(v, { font: { color: { rgb: C.text } }, alignment: { horizontal: 'right' } }, '0.00');
+  }
+  function volCell(v) {
+    if (v == null || isNaN(v)) return tx('—');
+    return s(v / 100, { font: { color: { rgb: C.text } }, alignment: { horizontal: 'right' } }, '0.00%');
+  }
   function sectionHdr(v) {
     return s(v, { font: { bold: true, color: { rgb: C.amber }, sz: 9 }, fill: { fgColor: { rgb: C.navy2 } }, alignment: { horizontal: 'left' } });
   }
@@ -2999,6 +3015,68 @@ async function exportExcel() {
   const spyRetForReport = spyITD != null ? spyITD : spyYTD;
   const qqqRetForReport = qqqITD != null ? qqqITD : qqqYTD;
 
+  // ── Extra Report analytics: per-name volatility, realized P&L, correlation ──
+  const volBySym = {};       // sym -> { v1m, v3m } annualised %, or undefined
+  const realizedBySym = {};  // sym -> realized $ (raw Alpaca dollars)
+  let corrSPY = null, corrQQQ = null;
+  try {
+    const syms = positions.map(p => p.symbol);
+    const startD = new Date(); startD.setDate(startD.getDate() - 130);
+    const sd = startD.toISOString().split('T')[0];
+    const allSyms = syms.concat(['SPY', 'QQQ']).join(',');
+    const bd = await fetchBarsReliable(
+      `/v2/stocks/bars?symbols=${encodeURIComponent(allSyms)}&timeframe=1Day&start=${sd}&limit=10000&adjustment=split`);
+    const bmap = (bd && bd.bars) || {};
+
+    const rets = arr => { const r = []; for (let i = 1; i < arr.length; i++) if (arr[i-1] > 0) r.push(arr[i]/arr[i-1] - 1); return r; };
+    const stdev = a => { if (a.length < 2) return null; const m = a.reduce((x,y)=>x+y,0)/a.length;
+                         return Math.sqrt(a.reduce((t,x)=>t+(x-m)*(x-m),0)/(a.length-1)); };
+    // Annualised vol over the last n trading days (21 ≈ 1 month, 63 ≈ 3 months)
+    const annVol = (closes, n) => { const r = rets(closes.slice(-(n+1))); const sv = stdev(r);
+                                    return sv == null ? null : sv * Math.sqrt(252) * 100; };
+
+    syms.forEach(sym => {
+      const bars = bmap[sym];
+      if (!bars || bars.length < 6) return;
+      const closes = bars.map(b => b.c);
+      volBySym[sym] = { v1m: annVol(closes, 21), v3m: annVol(closes, 63) };
+    });
+
+    // Correlation of PORTFOLIO daily returns vs SPY / QQQ daily returns (3M window)
+    const hist = await tapi(historyUrl('3M', '1D'));
+    if (hist && hist.timestamp && hist.timestamp.length) {
+      const pmap = {};
+      hist.timestamp.forEach((t, i) => {
+        const e = hist.equity[i];
+        if (e != null && e > 0) pmap[new Date(t*1000).toISOString().split('T')[0]] = e;
+      });
+      const pdates = Object.keys(pmap).sort();
+      const corrWith = sym => {
+        const b = bmap[sym];
+        if (!b) return null;
+        const bm = {}; b.forEach(x => { bm[x.t.split('T')[0]] = x.c; });
+        const pr = [], br = [];
+        for (let i = 1; i < pdates.length; i++) {
+          const d0 = pdates[i-1], d1 = pdates[i];
+          if (bm[d0] == null || bm[d1] == null || pmap[d0] <= 0 || bm[d0] <= 0) continue;
+          pr.push(pmap[d1]/pmap[d0] - 1);
+          br.push(bm[d1]/bm[d0] - 1);
+        }
+        if (pr.length < 5) return null;
+        const mp = pr.reduce((a,b2)=>a+b2,0)/pr.length, mb = br.reduce((a,b2)=>a+b2,0)/br.length;
+        let cv = 0, dp = 0, db = 0;
+        for (let i = 0; i < pr.length; i++) { const a = pr[i]-mp, b2 = br[i]-mb; cv += a*b2; dp += a*a; db += b2*b2; }
+        return (dp > 0 && db > 0) ? cv/Math.sqrt(dp*db) : null;
+      };
+      corrSPY = corrWith('SPY');
+      corrQQQ = corrWith('QQQ');
+    }
+
+    // Realized P&L per name — FIFO over the complete fill history
+    const allFills = await fetchAllFills();
+    Object.assign(realizedBySym, computeRealizedFIFO(allFills));
+  } catch(e) { console.warn('Report extras unavailable:', e && e.message); }
+
   // ════════════════════════════════════════════════════════
   // SHEET 1 — Report
   // ════════════════════════════════════════════════════════
@@ -3009,7 +3087,7 @@ async function exportExcel() {
     [tx('Portfolio Start Date'), dateCell(inceptionDt + 'T00:00:00')],
     [],
     [sectionHdr('ACCOUNT SUMMARY')],
-    [hdr('Metric'), hdr('Value'), null, hdr('Benchmark'), hdr('Return')],
+    [hdr10('Metric'), hdr10('Value'), null, hdr10('Benchmark'), hdr10('Return'), hdr10('Alpha'), hdr10('Correlation')],
     [tx('Portfolio Value'),        curr(pv)],
     [tx('Cash'),                   curr(md(parseFloat(account.cash||0)))],
     [tx('Buying Power'),           curr(md(getEffectiveBP()))],
@@ -3018,18 +3096,22 @@ async function exportExcel() {
     [tx('Day P&L ($)'),            plCell(dpl)],
     [tx('Day P&L (%)'),            plPctCell(leq ? dpl/leq*100 : 0), null,
      hdr(`SPY (since ${inceptionDt})`),
-     spyRetForReport != null ? plPctCell(spyRetForReport) : tx('—')],
+     spyRetForReport != null ? plPctCell(spyRetForReport) : tx('—'),
+     formulaPct('$B$16-E14'), corrCell(corrSPY)],
     [tx('Total Return ($)'),       plCell(totalRet), null,
      hdr(`QQQ (since ${inceptionDt})`),
-     qqqRetForReport != null ? plPctCell(qqqRetForReport) : tx('—')],
+     qqqRetForReport != null ? plPctCell(qqqRetForReport) : tx('—'),
+     formulaPct('$B$16-E15'), corrCell(corrQQQ)],
     [tx('Total Return (%)'),       plPctCell(STARTING_EQUITY ? totalRet/STARTING_EQUITY*100 : 0)],
     [tx('Day Trades Used'),        num(account.daytrade_count||0)],
     [],
     [sectionHdr('OPEN POSITIONS')],
-    [hdr('Ticker'),hdr('Conv'),hdr('Top'),hdr('Least'),
-     hdr('Qty'),hdr('Avg Entry'),hdr('Current'),hdr('Target $'),hdr('% to FP'),
-     hdr('Mkt Value'),hdr('Cost Basis'),hdr('% of Eq'),
-     hdr('Unr P&L'),hdr('Unr %'),hdr('Day %')],
+    [hdr10('Ticker'),hdr10('Conv'),hdr10('Top Idea'),hdr10('Least Fav'),
+     hdr10('% of Eq'),hdr10('Qty'),hdr10('Current'),hdr10('Target $'),hdr10('% to FP'),
+     hdr10('Mkt Value'),hdr10('Cost Basis'),
+     hdr10('Unrealized P&L'),hdr10('Unrealized %'),
+     hdr10('Realized P&L'),hdr10('Total P&L'),hdr10('Day %'),
+     hdr10('1 Month Vol'),hdr10('3 Month Vol')],
     ...positions.map(p => {
       const ap = getSplitAdjustedPosition(p);
       const mv = md(parseFloat(ap.market_value));
@@ -3039,22 +3121,31 @@ async function exportExcel() {
         ? ((parseFloat(meta.targetPrice) - currPx) / currPx * 100) : null;
       const topStr = meta.topIdea === '1' ? 'XXX' : meta.topIdea === '2' ? 'XX' : meta.topIdea === '3' ? 'X' : '';
       const leastStr = meta.leastFav === '1' ? '***' : meta.leastFav === '2' ? '**' : meta.leastFav === '3' ? '*' : '';
+      const unrRaw   = parseFloat(ap.unrealized_pl);
+      const realRaw  = realizedBySym[ap.symbol] || 0;      // raw $, FIFO
+      const totalRaw = unrRaw + realRaw;                    // raw $
+      const vol      = volBySym[ap.symbol] || {};
+      const money = (raw, disp) => s(Math.round(disp),
+        { font: { color: { rgb: raw >= 0 ? C.green : C.red } }, alignment: { horizontal: 'right' } }, '$#,##0');
       return [
         tx(ap.symbol + (ap._splitMult > 1 ? ` (${ap._splitMult}:1)` : '')),
         tx(meta.conviction || ''),
         tx(topStr),
         tx(leastStr),
+        pct(pv ? Math.abs(mv)/pv*100 : 0),
         num(Math.round(Math.abs(parseFloat(ap.qty)) * MULTIPLIER), '#,##0'),
-        curr(parseFloat(ap.avg_entry_price)),
         curr(parseFloat(ap.current_price)),
         meta.targetPrice ? num(Math.round(parseFloat(meta.targetPrice)), '$#,##0') : tx(''),
         pctFP != null ? num(Math.round(pctFP), '0"%"') : tx(''),
         num(Math.round(mv), '$#,##0'),
         num(Math.round(md(parseFloat(ap.cost_basis))), '$#,##0'),
-        pct(pv ? Math.abs(mv)/pv*100 : 0),
-        s(Math.round(md(parseFloat(ap.unrealized_pl))), { font: { color: { rgb: parseFloat(ap.unrealized_pl) >= 0 ? C.green : C.red } }, alignment: { horizontal: 'right' } }, '$#,##0'),
+        money(unrRaw,   md(unrRaw)),
         plPctCell(parseFloat(ap.unrealized_plpc)*100),
+        money(realRaw,  md(realRaw)),
+        money(totalRaw, md(totalRaw)),
         plPctCell(parseFloat(ap.unrealized_intraday_plpc)*100),
+        volCell(vol.v1m),
+        volCell(vol.v3m),
       ];
     }),
   ];
@@ -3105,7 +3196,7 @@ async function exportExcel() {
     r.pass ? passCell('PASS') : failCell('FAIL'),
   ]));
 
-  appendSheet(repRows, 'Report', [14,6,6,6,8,11,11,10,8,12,12,8,12,8,8]);
+  appendSheet(repRows, 'Report', [16,7,9,9,9,9,11,10,8,12,12,13,11,12,12,8,11,11]);
 
   // ════════════════════════════════════════════════════════
   // SHEET 2 — Trade Log (grouped by ticker)
