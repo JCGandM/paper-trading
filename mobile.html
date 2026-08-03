@@ -1060,13 +1060,44 @@ const dapi = (path, opts) => req(DATA_BASE, path, opts);
 // ── Returns helpers (ported from desktop) ────────────────
 function ytdStartDate() {
   const jan1 = new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0];
-  const sorted = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
-  const inception = sorted.length ? sorted[0].date : null;
+  // If trading started after Jan 1, YTD can't begin before you existed
+  const inception = getInceptionDate();
   return (inception && inception > jan1) ? inception : jan1;
 }
+
+// Inception = the day of your FIRST fill ever (cached), matching desktop.
+// Falls back to 2026-05-01 until resolved.
 function getInceptionDate() {
-  const sorted = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
-  return sorted.length ? sorted[0].date : new Date().toISOString().split('T')[0];
+  try {
+    const override = localStorage.getItem(`pp_${ACTIVE_ID}_inception`);
+    if (override && /^\d{4}-\d{2}-\d{2}$/.test(override)) return override;
+    const cached = localStorage.getItem(`pp_${ACTIVE_ID}_first_fill`);
+    if (cached && /^\d{4}-\d{2}-\d{2}$/.test(cached)) return cached;
+  } catch {}
+  return '2026-05-01';
+}
+
+// Fetch & cache the earliest fill date once (async, non-blocking).
+async function resolveInceptionDate() {
+  try {
+    const override = localStorage.getItem(`pp_${ACTIVE_ID}_inception`);
+    if (override && /^\d{4}-\d{2}-\d{2}$/.test(override)) return;
+    const prev = localStorage.getItem(`pp_${ACTIVE_ID}_first_fill`);
+    const first = await tapi('/v2/account/activities/FILL?page_size=1&direction=asc');
+    if (Array.isArray(first) && first.length && first[0].transaction_time) {
+      const d = first[0].transaction_time.split('T')[0];
+      if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+        localStorage.setItem(`pp_${ACTIVE_ID}_first_fill`, d);
+        // Re-render returns if the resolved date changed and analytics is open
+        if (d !== prev && currentTab === 'analytics') {
+          if (typeof renderReturnsAnalytics === 'function') renderReturnsAnalytics();
+        }
+        if (d !== prev && typeof renderHeroReturns === 'function') {
+          renderHeroReturns(cachedEquity + getSplitEquityDelta(cachedPositions));
+        }
+      }
+    }
+  } catch { /* keep fallback */ }
 }
 function portReturnOverLog(entries) {
   if (!entries.length) return null;
@@ -1809,15 +1840,27 @@ async function mobilePortfolioReturn(period) {
       const start = ytdStartDate();
       url = `/v2/account/portfolio/history?start=${start}T00:00:00Z&timeframe=1D&extended_hours=false`;
     } else {
-      url = `/v2/account/portfolio/history?period=1A&timeframe=1D&extended_hours=false`;
+      // ITD — span from your first-fill inception, not a generic 1-year window
+      const start = getInceptionDate();
+      url = `/v2/account/portfolio/history?start=${start}T00:00:00Z&timeframe=1D&extended_hours=false`;
     }
     const hist = await tapi(url);
     if (!hist?.timestamp?.length) return { pct: null, startDate: null };
 
-    const pts = hist.timestamp
+    let pts = hist.timestamp
       .map((t, i) => ({ t, e: hist.equity[i] }))
       .filter(p => p.e != null && p.e > 0);
     if (pts.length < 2) return { pct: null, startDate: null };
+
+    // Trim leading flat-cash days so the benchmark anchors to real trading start
+    if (pts.length > 3) {
+      const firstEq = pts[0].e;
+      let startIdx = 0;
+      for (let i = 1; i < pts.length; i++) {
+        if (Math.abs(pts[i].e - firstEq) / firstEq > 0.0001) { startIdx = i - 1; break; }
+      }
+      if (startIdx > 0) pts = pts.slice(startIdx);
+    }
 
     // Pin the last point to current split-corrected equity for an accurate "today"
     const currentCorrected = cachedEquity + getSplitEquityDelta(cachedPositions);
@@ -2163,6 +2206,9 @@ function renderAnalytics() {
   }
 
   setText('port-name', PORTFOLIO_NAME);
+
+  // Resolve inception date (first-fill) once, then initial load
+  resolveInceptionDate();
 
   // Initial load
   refresh();
