@@ -580,6 +580,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
             <button class="p-btn" data-p="6M" onclick="loadChart('6M')">6M</button>
             <button class="p-btn" data-p="YTD" onclick="loadChart('YTD')">YTD</button>
             <button class="p-btn" data-p="1A" onclick="loadChart('1A')">1Y</button>
+            <button class="p-btn" data-p="ITD" onclick="loadChart('ITD')">ITD</button>
             <div style="margin-left:auto;display:flex;align-items:center;gap:12px">
               <label class="bench-lbl">
                 <input type="checkbox" id="spy-chk" checked onchange="reloadChart()"> SPY
@@ -2396,7 +2397,7 @@ function exportLedgerExcel() {
 // ══════════════════════════════════════
 // PERFORMANCE CHART
 // ══════════════════════════════════════
-const periodTF = { '1D':'15Min', '1W':'1H', '1M':'1D', '3M':'1D', '6M':'1D', 'YTD':'1D', '1A':'1D' };
+const periodTF = { '1D':'15Min', '1W':'1H', '1M':'1D', '3M':'1D', '6M':'1D', 'YTD':'1D', '1A':'1D', 'ITD':'1D' };
 const dataTF   = { '15Min':'15Min', '1H':'1Hour', '1D':'1Day' };
 
 // Benchmark cache: { 'SPY_1M_2025-01-01': { pcts: [...], ts: epoch } }
@@ -2425,6 +2426,16 @@ function historyUrl(period, tf) {
   if (period === 'YTD') {
     const start = ytdStartDate();
     // Alpaca requires RFC3339 format for the start parameter
+    return `/v2/account/portfolio/history?start=${start}T00:00:00Z&timeframe=${tf}&extended_hours=false`;
+  }
+  if (period === 'ITD') {
+    // Inception to date — span from account creation. Prefer Alpaca's account
+    // created_at; fall back to the daily-log inception. If neither, use a long
+    // lookback that covers any paper account.
+    let start = null;
+    if (account && account.created_at) start = account.created_at.split('T')[0];
+    if (!start) start = getInceptionDate();
+    if (!start) start = '2015-01-01';  // Alpaca predates any paper account
     return `/v2/account/portfolio/history?start=${start}T00:00:00Z&timeframe=${tf}&extended_hours=false`;
   }
   return `/v2/account/portfolio/history?period=${period}&timeframe=${tf}&extended_hours=false`;
