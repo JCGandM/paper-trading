@@ -1008,6 +1008,7 @@ function applyPortfolio(id) {
   localStorage.setItem('pp_active_portfolio', id);
   loadSplitAdjustments();
   loadPositionMeta();
+  resolveInceptionDate();  // fetch & cache first-fill date (async, non-blocking)
 }
 
 function savePortfolioList() {
@@ -2406,19 +2407,56 @@ const BENCH_TTL  = 60 * 60 * 1000; // 1 hour — re-fetch if older
 
 function ytdStartDate() {
   const jan1 = new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0];
-  // If the portfolio started after Jan 1 (account created mid-year),
-  // Alpaca has no data before that — use inception date instead
-  const sortedLog = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
-  const inceptionDate = sortedLog.length ? sortedLog[0].date : null;
-  // Use whichever is later: Jan 1 or inception
+  // If trading started after Jan 1, YTD can't begin before you existed —
+  // use the explicit inception date instead. (For a 5/1/26 inception, YTD == ITD.)
+  const inceptionDate = getInceptionDate();
   if (inceptionDate && inceptionDate > jan1) return inceptionDate;
   return jan1;
 }
 
 // Portfolio inception date — first daily log entry or first trade
+// Explicit trading inception date — the day of your FIRST trade ever.
+// Derived from the earliest fill in account history (fetched once, cached in
+// localStorage). This is the true economic start of the portfolio and works
+// for any account without hardcoding. Falls back to 2026-05-01 until resolved.
 function getInceptionDate() {
-  const sortedLog = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
-  return sortedLog.length ? sortedLog[0].date : today();
+  try {
+    // 1) Manual override, if ever set
+    const override = localStorage.getItem(`pp_${activePortId}_inception`);
+    if (override && /^\d{4}-\d{2}-\d{2}$/.test(override)) return override;
+    // 2) Cached first-fill date (resolved asynchronously at load)
+    const cached = localStorage.getItem(`pp_${activePortId}_first_fill`);
+    if (cached && /^\d{4}-\d{2}-\d{2}$/.test(cached)) return cached;
+  } catch {}
+  // 3) Fallback until the first-fill fetch completes
+  return '2026-05-01';
+}
+
+// Fetch the earliest fill date once and cache it. Called at load / portfolio switch.
+async function resolveInceptionDate() {
+  try {
+    // If a manual override exists, respect it and skip the fetch
+    const override = localStorage.getItem(`pp_${activePortId}_inception`);
+    if (override && /^\d{4}-\d{2}-\d{2}$/.test(override)) return;
+
+    const prev = localStorage.getItem(`pp_${activePortId}_first_fill`);
+
+    // Earliest fill = first page in ascending order
+    const first = await tapi('/v2/account/activities/FILL?page_size=1&direction=asc');
+    if (Array.isArray(first) && first.length && first[0].transaction_time) {
+      const d = first[0].transaction_time.split('T')[0];
+      if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+        localStorage.setItem(`pp_${activePortId}_first_fill`, d);
+        // If the resolved date changed what we were using, refresh the returns view
+        if (d !== prev) {
+          const activeTab = document.querySelector('.tab-panel:not([style*="none"])')?.id;
+          if (typeof renderReturnsTab === 'function' && activeTab === 'tab-returns') renderReturnsTab();
+          const chartPeriodBtn = document.querySelector('.p-btn.active');
+          if (chartPeriodBtn && typeof loadChart === 'function') loadChart(chartPeriodBtn.dataset.p);
+        }
+      }
+    }
+  } catch { /* keep fallback */ }
 }
 
 // Build Alpaca portfolio/history URL — YTD needs special handling
@@ -2429,13 +2467,10 @@ function historyUrl(period, tf) {
     return `/v2/account/portfolio/history?start=${start}T00:00:00Z&timeframe=${tf}&extended_hours=false`;
   }
   if (period === 'ITD') {
-    // Inception to date — span from account creation. Prefer Alpaca's account
-    // created_at; fall back to the daily-log inception. If neither, use a long
-    // lookback that covers any paper account.
-    let start = null;
-    if (account && account.created_at) start = account.created_at.split('T')[0];
-    if (!start) start = getInceptionDate();
-    if (!start) start = '2015-01-01';  // Alpaca predates any paper account
+    // Inception to date — span from your explicit first trading day (5/1/26),
+    // NOT account creation (which may include flat pre-trading cash days that
+    // wrongly inflate benchmark returns).
+    const start = getInceptionDate();
     return `/v2/account/portfolio/history?start=${start}T00:00:00Z&timeframe=${tf}&extended_hours=false`;
   }
   return `/v2/account/portfolio/history?period=${period}&timeframe=${tf}&extended_hours=false`;
@@ -2460,7 +2495,7 @@ async function fetchSplitBars(symbol, timeframe, startDate) {
 
   try {
     const atf  = dataTF[timeframe] || '1Day';
-    const data  = await dapi(`/v2/stocks/${encodeURIComponent(symbol)}/bars?timeframe=${atf}&start=${startDate}&limit=500&feed=iex&adjustment=split`);
+    const data  = await fetchBarsReliable(`/v2/stocks/${encodeURIComponent(symbol)}/bars?timeframe=${atf}&start=${startDate}&limit=500&adjustment=split`);
     if (!data?.bars?.length) return null;
     // Build date → closing price map
     const priceMap = {};
@@ -2528,7 +2563,7 @@ async function loadChart(period) {
       return;
     }
 
-    const rawPts = hist.timestamp
+    let rawPts = hist.timestamp
       .map((t, i) => ({ t, e: hist.equity[i], pl: hist.profit_loss_pct[i] }))
       .filter(p => p.e != null && p.e > 0);
 
@@ -2537,6 +2572,24 @@ async function loadChart(period) {
       msgEl.textContent = 'Not enough data points yet.';
       msgEl.style.display = 'block';
       return;
+    }
+
+    // ── Trim leading "flat cash" points ──────────────────────────────
+    // For long ranges (ITD especially), Alpaca returns days BEFORE you started
+    // trading where equity is just your initial cash sitting flat. Those days
+    // have 0% portfolio return but the benchmark (QQQ/SPY) was moving — which
+    // wrongly inflates the benchmark's return over the period. Anchor the whole
+    // chart to the first day your equity actually STARTED MOVING (first real
+    // trading activity), so portfolio and benchmark share a true start.
+    if (rawPts.length > 3) {
+      const firstEq = rawPts[0].e;
+      // Find first index where equity differs from the initial flat value by >0.01%
+      let startIdx = 0;
+      for (let i = 1; i < rawPts.length; i++) {
+        if (Math.abs(rawPts[i].e - firstEq) / firstEq > 0.0001) { startIdx = i - 1; break; }
+      }
+      // Only trim if there were genuinely flat leading days (startIdx moved forward)
+      if (startIdx > 0) rawPts = rawPts.slice(startIdx);
     }
 
     const timestamps  = rawPts.map(p => p.t);
@@ -2599,6 +2652,16 @@ async function loadChart(period) {
       ${splitNote}
     `;
 
+    // Diagnostic readout — shows exactly what base price/date/feed each benchmark used.
+    // Helps verify the historical data is correct across timeframes.
+    const dg = window._benchDiag || {};
+    const diagParts = [];
+    if (dg.QQQ) diagParts.push(`QQQ: base $${dg.QQQ.base} (${dg.QQQ.baseDate}) → $${dg.QQQ.lastClose} · ${dg.QQQ.barCount} bars · ${dg.QQQ.feed}`);
+    if (dg.SPY) diagParts.push(`SPY: base $${dg.SPY.base} (${dg.SPY.baseDate}) → $${dg.SPY.lastClose} · ${dg.SPY.feed}`);
+    if (diagParts.length) {
+      statsEl.innerHTML += `<div style="width:100%;margin-top:8px;font-size:9px;color:var(--dim);font-family:'IBM Plex Mono',monospace;border-top:1px solid var(--border);padding-top:6px">🔎 ${diagParts.join(' &nbsp;|&nbsp; ')}</div>`;
+    }
+
   } catch(e) {
     wrapEl.style.display = 'none';
     msgEl.style.color = 'var(--red)';
@@ -2611,6 +2674,23 @@ async function loadChart(period) {
 // Returns an array the same length as `portTimestamps`, where each entry is the
 // benchmark's % return (from its first bar) as of that portfolio point's date.
 // This guarantees the plotted line and the end-of-series stat agree.
+// Fetch historical bars with the most reliable feed available.
+// SIP (all US exchanges) gives accurate closes; if the account isn't entitled
+// to SIP, Alpaca returns 403 and we fall back to IEX. This fixes wrong/erratic
+// benchmark returns caused by IEX's sparse single-exchange history.
+async function fetchBarsReliable(pathBase) {
+  // pathBase must NOT include the feed param; we append it.
+  try {
+    const r = await dapi(`${pathBase}&feed=sip`);
+    window._lastFeed = 'sip';
+    return r;
+  } catch (e) {
+    // 403 = not entitled to SIP; fall back to IEX. Other errors also fall back.
+    try { const r = await dapi(`${pathBase}&feed=iex`); window._lastFeed = 'iex'; return r; }
+    catch { return null; }
+  }
+}
+
 async function fetchBenchmarkAligned(sym, portTimestamps, tf) {
   const startDate = new Date(portTimestamps[0] * 1000).toISOString().split('T')[0];
   const endDate   = new Date(portTimestamps[portTimestamps.length - 1] * 1000).toISOString().split('T')[0];
@@ -2626,7 +2706,7 @@ async function fetchBenchmarkAligned(sym, portTimestamps, tf) {
     const sd = new Date(startDate + 'T00:00:00Z');
     sd.setUTCDate(sd.getUTCDate() - 7);
     const fetchStart = sd.toISOString().split('T')[0];
-    const data = await dapi(`/v2/stocks/${sym}/bars?timeframe=${atf}&start=${fetchStart}&limit=2000&feed=iex&adjustment=split`);
+    const data = await fetchBarsReliable(`/v2/stocks/${sym}/bars?timeframe=${atf}&start=${fetchStart}&limit=2000&adjustment=split`);
     const bars = data?.bars;
     if (!bars || bars.length < 2) return null;
 
@@ -2641,6 +2721,16 @@ async function fetchBenchmarkAligned(sym, portTimestamps, tf) {
     let base = null;
     for (const o of ordered) { if (o.ms <= firstMs) base = o.c; else break; }
     if (base == null) base = ordered[0].c;  // portfolio predates benchmark data
+
+    // Diagnostic: record what this benchmark used so we can surface it in the UI
+    window._benchDiag = window._benchDiag || {};
+    window._benchDiag[sym] = {
+      feed: window._lastFeed || '?',
+      base: base.toFixed(2),
+      baseDate: new Date(ordered.find(o => o.c === base)?.ms || firstMs).toISOString().split('T')[0],
+      lastClose: ordered[ordered.length - 1].c.toFixed(2),
+      barCount: ordered.length,
+    };
 
     // For each portfolio point, find the benchmark close at or before that point's
     // time (nearest prior bar). This mirrors the portfolio's own points exactly —
@@ -4304,10 +4394,21 @@ async function portfolioReturnFromHistory(period) {
     const hist = await tapi(historyUrl(period, tf));
     if (!hist?.timestamp?.length) return { pct: null, startDate: null };
 
-    const rawPts = hist.timestamp
+    let rawPts = hist.timestamp
       .map((t, i) => ({ t, e: hist.equity[i] }))
       .filter(p => p.e != null && p.e > 0);
     if (rawPts.length < 2) return { pct: null, startDate: null };
+
+    // Trim leading flat-cash days (see loadChart): anchor to first real activity
+    // so the benchmark start date matches when you were actually invested.
+    if (rawPts.length > 3) {
+      const firstEq = rawPts[0].e;
+      let startIdx = 0;
+      for (let i = 1; i < rawPts.length; i++) {
+        if (Math.abs(rawPts[i].e - firstEq) / firstEq > 0.0001) { startIdx = i - 1; break; }
+      }
+      if (startIdx > 0) rawPts = rawPts.slice(startIdx);
+    }
 
     const timestamps  = rawPts.map(p => p.t);
     const rawEquities = rawPts.map(p => p.e);
@@ -4335,8 +4436,8 @@ async function fetchBenchmarkReturn(sym, startDate, endDate) {
     const sd = new Date(startDate + 'T00:00:00Z');
     sd.setUTCDate(sd.getUTCDate() - 5);
     const fetchStart = sd.toISOString().split('T')[0];
-    const data = await dapi(
-      `/v2/stocks/${encodeURIComponent(sym)}/bars?timeframe=1Day&start=${fetchStart}&end=${endDate}&limit=400&feed=iex&adjustment=split`
+    const data = await fetchBarsReliable(
+      `/v2/stocks/${encodeURIComponent(sym)}/bars?timeframe=1Day&start=${fetchStart}&end=${endDate}&limit=400&adjustment=split`
     );
     const bars = data?.bars;
     if (!bars || bars.length < 2) return null;
