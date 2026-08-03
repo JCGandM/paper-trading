@@ -1623,7 +1623,7 @@ function onSymInput(val) {
 
 async function fetchQuote(sym) {
   try {
-    const snap = await dapi(`/v2/stocks/${encodeURIComponent(sym)}/snapshot?feed=iex`);
+    const snap = await fetchSnapshotReliable(sym);
     if (!snap) return;
     const last = snap.latestTrade?.p;
     const bid  = snap.latestQuote?.bp;
@@ -1751,7 +1751,7 @@ function setMaxShares() {
 // Returns { ask, source } or null. Prefers ask > last trade > day close > prev close.
 async function getFreshAsk(sym) {
   try {
-    const snap = await dapi(`/v2/stocks/${encodeURIComponent(sym)}/snapshot?feed=iex`);
+    const snap = await fetchSnapshotReliable(sym);
     if (!snap) return null;
     const ask  = snap.latestQuote?.ap;
     const last = snap.latestTrade?.p;
@@ -2458,6 +2458,7 @@ function setInceptionDate(d) {
   localStorage.setItem(`pp_${activePortId}_inception`, d);
   Object.keys(benchCache).forEach(k => delete benchCache[k]);  // clear stale anchors
   returnsCache = null;
+  riskCache    = null;   // vol/correlation window is clamped to inception too
   const btn = document.querySelector('.p-btn.active');
   if (btn) loadChart(btn.dataset.p);
   if (typeof renderReturnsTab === 'function') renderReturnsTab();
@@ -2522,6 +2523,14 @@ function historyUrl(period, tf) {
 // Extra API calls: 1 per split symbol per chart period, cached 60 min.
 // ──────────────────────────────────────────────────────────────────────────
 
+// Convert an Alpaca portfolio-history timestamp to its TRUE trading date.
+// Daily points are stamped at 8pm ET (= 00:00 UTC the next day), so naively
+// calling toISOString() yields tomorrow's date. Backing off one second fixes
+// both that convention and same-day close stamps.
+function tsTradingDate(ts) {
+  return new Date(ts * 1000 - 1000).toISOString().split('T')[0];
+}
+
 const splitBarCache = {};  // key: "SYMBOL_timeframe_startDate" → { bars: {date→price}, ts }
 const SPLIT_BAR_TTL = 60 * 60 * 1000;
 
@@ -2553,7 +2562,7 @@ async function applySplitCorrectionsToEquitySeries(timestamps, rawEquities, time
   if (!splitAdjustments.length) return rawEquities;
 
   const corrected = [...rawEquities];
-  const startDate = new Date(timestamps[0] * 1000).toISOString().split('T')[0];
+  const startDate = tsTradingDate(timestamps[0]);
 
   for (const split of splitAdjustments) {
     const pos = positions.find(p => p.symbol === split.symbol);
@@ -2653,7 +2662,7 @@ async function loadChart(period) {
         : d.toLocaleDateString('en-US', { month:'short', day:'numeric' });
     });
 
-    const startDate = new Date(rawPts[0].t * 1000).toISOString().split('T')[0];
+    const startDate = tsTradingDate(rawPts[0].t);
 
     // ── Step 4: Fetch benchmarks anchored to the SAME explicit period start ──
     const anchorDate = periodStartDate(period);
@@ -2761,6 +2770,15 @@ async function loadChart(period) {
 // SIP (all US exchanges) gives accurate closes; if the account isn't entitled
 // to SIP, Alpaca returns 403 and we fall back to IEX. This fixes wrong/erratic
 // benchmark returns caused by IEX's sparse single-exchange history.
+// Live snapshot from the consolidated tape, falling back to IEX if the account
+// isn't SIP-entitled. Quotes feed the buying-power check and Max Shares, so the
+// consolidated bid/ask matters more here than a few ms of latency.
+async function fetchSnapshotReliable(sym) {
+  const base = `/v2/stocks/${encodeURIComponent(sym)}/snapshot`;
+  try { return await dapi(`${base}?feed=sip`); }
+  catch { return await dapi(`${base}?feed=iex`); }
+}
+
 async function fetchBarsReliable(pathBase) {
   // pathBase must NOT include the feed param; we append it.
   try {
@@ -2778,8 +2796,8 @@ async function fetchBenchmarkAligned(sym, portTimestamps, tf, anchorDate) {
   // anchorDate is the AUTHORITATIVE period start (from periodStartDate).
   // The benchmark baseline is the close on/before this date — never inferred
   // from portTimestamps, which vary with Alpaca's response padding.
-  const startDate = anchorDate || new Date(portTimestamps[0] * 1000).toISOString().split('T')[0];
-  const endDate   = new Date(portTimestamps[portTimestamps.length - 1] * 1000).toISOString().split('T')[0];
+  const startDate = anchorDate || tsTradingDate(portTimestamps[0]);
+  const endDate   = tsTradingDate(portTimestamps[portTimestamps.length - 1]);
   const key = `${sym}_${tf}_${startDate}_${endDate}_aligned`;
   const now = Date.now();
   const cached = benchCache[key];
@@ -2929,29 +2947,46 @@ async function computeRiskAnalytics(symbols) {
       let corrEq = cEq;
       try { corrEq = await applySplitCorrectionsToEquitySeries(cTs, cEq, '1D'); } catch {}
 
-      const pmap = {};
-      cTs.forEach((t, i) => { const e = corrEq[i]; if (e != null && e > 0) pmap[new Date(t*1000).toISOString().split('T')[0]] = e; });
-      const pdates = Object.keys(pmap).sort();
+      // Portfolio points as {ms, eq}. NOTE: do NOT key these by date string —
+      // Alpaca stamps daily portfolio points at 8pm ET (= 00:00 UTC the NEXT
+      // day), so toISOString() would label them one day late and pair each
+      // portfolio day with the following benchmark day (a 1-day lag that turns
+      // a genuine +0.95 correlation into a small negative). Align by raw
+      // timestamp instead, exactly like the chart does.
+      const pPts = [];
+      cTs.forEach((t, i) => { const e = corrEq[i]; if (e != null && e > 0) pPts.push({ ms: t * 1000, eq: e }); });
+      pPts.sort((a, b) => a.ms - b.ms);
 
       const pAll = [];
-      for (let i = 1; i < pdates.length; i++) {
-        const a = pmap[pdates[i-1]], b = pmap[pdates[i]];
+      for (let i = 1; i < pPts.length; i++) {
+        const a = pPts[i-1].eq, b = pPts[i].eq;
         if (a > 0 && b > 0) pAll.push(b/a - 1);
       }
       out.portVol3m = annVolFromRets(pAll);
       out.portVol1m = annVolFromRets(pAll.slice(-21));
 
       const corrWith = sym => {
-        const b = bmap[sym];
-        if (!b) return null;
-        const bm = {}; b.forEach(x => { bm[x.t.split('T')[0]] = x.c; });
+        const bars = bmap[sym];
+        if (!bars || !bars.length) return null;
+        const bseries = bars.map(x => ({ ms: new Date(x.t).getTime(), c: x.c }))
+                            .sort((a, b) => a.ms - b.ms);
+        // For each portfolio point, take the benchmark close at or before that
+        // instant, and record whether a NEW bar was consumed (so we only pair
+        // days where both series genuinely advanced).
+        let idx = 0, lastC = null;
+        const paired = [];
+        for (const pt of pPts) {
+          let advanced = false;
+          while (idx < bseries.length && bseries[idx].ms <= pt.ms) { lastC = bseries[idx].c; idx++; advanced = true; }
+          if (lastC != null) paired.push({ eq: pt.eq, bc: lastC, advanced });
+        }
         const pr = [], br = [];
-        for (let i = 1; i < pdates.length; i++) {
-          const d0 = pdates[i-1], d1 = pdates[i];
-          if (bm[d0] == null || bm[d1] == null) continue;
-          if (!(pmap[d0] > 0) || !(pmap[d1] > 0) || !(bm[d0] > 0) || !(bm[d1] > 0)) continue;
-          pr.push(pmap[d1]/pmap[d0] - 1);
-          br.push(bm[d1]/bm[d0] - 1);
+        for (let i = 1; i < paired.length; i++) {
+          const a = paired[i-1], b = paired[i];
+          if (!b.advanced) continue;                       // no new benchmark bar
+          if (!(a.eq > 0) || !(b.eq > 0) || !(a.bc > 0) || !(b.bc > 0)) continue;
+          pr.push(b.eq/a.eq - 1);
+          br.push(b.bc/a.bc - 1);
         }
         if (pr.length < 20) return null;   // too few points = noise
         const mp = pr.reduce((a,b2)=>a+b2,0)/pr.length, mb = br.reduce((a,b2)=>a+b2,0)/br.length;
@@ -3738,7 +3773,7 @@ async function batchFetchPrice(id, sym) {
   r.status = 'fetching';
   renderBatchRows();
   try {
-    const snap = await dapi(`/v2/stocks/${encodeURIComponent(sym)}/snapshot?feed=iex`);
+    const snap = await fetchSnapshotReliable(sym);
     const ask  = snap?.latestQuote?.ap;
     const last = snap?.latestTrade?.p;
     const dayC = snap?.dailyBar?.c;
@@ -4204,7 +4239,7 @@ async function loadSparklines(forceRefresh = false) {
   try {
     const syms      = positions.map(p => p.symbol).join(',');
     const startDate = new Date(Date.now() - 35 * 24 * 3600 * 1000).toISOString().split('T')[0];
-    const baseUrl   = `/v2/stocks/bars?symbols=${syms}&timeframe=1Day&start=${startDate}&limit=35&feed=iex&adjustment=split`;
+    const baseUrl   = `/v2/stocks/bars?symbols=${syms}&timeframe=1Day&start=${startDate}&limit=35&adjustment=split`;
 
     // Follow pagination — Alpaca returns a subset of symbols per page
     const allBars = {};
@@ -4617,7 +4652,7 @@ async function portfolioReturnFromHistory(period) {
     const base = corrected.find(e => e > 0) || corrected[0];
     const end  = corrected[corrected.length - 1];
     const pct  = base > 0 ? (end - base) / base * 100 : null;
-    const startDate = new Date(rawPts[0].t * 1000).toISOString().split('T')[0];
+    const startDate = tsTradingDate(rawPts[0].t);
     return { pct, startDate };
   } catch {
     return { pct: null, startDate: null };
