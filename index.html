@@ -2621,9 +2621,23 @@ async function loadChart(period) {
     // ── Step 2: Apply split corrections to equity series ──
     const correctedEquities = await applySplitCorrectionsToEquitySeries(timestamps, rawEquities, tf);
 
-    // Pin the last point to the current corrected equity so today is always accurate
+    // Pin the last point to the current corrected equity so today is always accurate.
+    // IMPORTANT: Alpaca's daily portfolio history lags the live session — its last
+    // point is often the previous trading day. Overwriting that point with today's
+    // equity measured the PORTFOLIO to today while the benchmarks (aligned to these
+    // timestamps) stopped at the stale date. Append a live point instead so both
+    // sides end on the same day.
     const currentCorrected = account._correctedEquity || (parseFloat(account.equity || 0) + getSplitEquityDelta());
-    correctedEquities[correctedEquities.length - 1] = currentCorrected;
+    const todayStr = new Date().toISOString().split('T')[0];
+    const lastStr  = new Date(timestamps[timestamps.length - 1] * 1000).toISOString().split('T')[0];
+    if (lastStr < todayStr) {
+      const nowTs = Math.floor(Date.now() / 1000);
+      timestamps.push(nowTs);
+      correctedEquities.push(currentCorrected);
+      rawPts.push({ t: nowTs, e: currentCorrected, pl: null });
+    } else {
+      correctedEquities[correctedEquities.length - 1] = currentCorrected;
+    }
 
     // ── Step 3: Recompute % returns from corrected equity series ──
     // Base = first non-zero corrected equity value
