@@ -1595,8 +1595,7 @@ async function fetchQuote() {
   const sym = document.getElementById('ot-sym').value.trim().toUpperCase();
   if (!sym) return;
   try {
-    const snap = await req(DATA_BASE,
-      `/v2/stocks/${encodeURIComponent(sym)}/snapshot?feed=iex`);
+    const snap = await fetchSnapshotReliableMobile(sym);
     const ask  = snap?.latestTrade?.p || snap?.latestQuote?.ap || snap?.minuteBar?.c;
     const prev = snap?.prevDailyBar?.c;
     otQuotePx  = ask || null;
@@ -1654,6 +1653,12 @@ function clearError() { document.getElementById('ot-error').textContent = ''; }
 
 // Fresh ask price at submit time (not cached)
 // Historical bars with the reliable consolidated feed; IEX only as fallback.
+async function fetchSnapshotReliableMobile(sym) {
+  const base = `/v2/stocks/${encodeURIComponent(sym)}/snapshot`;
+  try { return await dapi(`${base}?feed=sip`); }
+  catch { return await dapi(`${base}?feed=iex`); }
+}
+
 async function fetchBarsReliableMobile(pathBase) {
   try { return await dapi(`${pathBase}&feed=sip`); }
   catch { try { return await dapi(`${pathBase}&feed=iex`); } catch { return null; } }
@@ -1661,7 +1666,7 @@ async function fetchBarsReliableMobile(pathBase) {
 
 async function getFreshAskMobile(sym) {
   try {
-    const snap = await req(DATA_BASE, `/v2/stocks/${encodeURIComponent(sym)}/snapshot?feed=iex`);
+    const snap = await fetchSnapshotReliableMobile(sym);
     if (!snap) return null;
     const px = snap.latestQuote?.ap || snap.latestTrade?.p || snap.dailyBar?.c || snap.prevDailyBar?.c || null;
     return px ? { px } : null;
@@ -1863,8 +1868,12 @@ async function mobilePortfolioReturn(period) {
     const base = pts[0].e;
     const end  = currentCorrected > 0 ? currentCorrected : pts[pts.length - 1].e;
     const pct  = base > 0 ? (end - base) / base * 100 : null;
-    const startDate = new Date(pts[0].t * 1000).toISOString().split('T')[0];
-    const endDate   = new Date(pts[pts.length-1].t * 1000).toISOString().split('T')[0];
+    // Return the EXPLICIT period start (deterministic), not one derived from
+    // timestamps — Alpaca stamps daily points at 00:00 UTC of the NEXT day, so
+    // a derived date is one day late and would mis-anchor the benchmarks.
+    const startDate = (period === 'YTD') ? ytdStartDate() : getInceptionDate();
+    // For display, convert a timestamp to its true trading date (back off 1s).
+    const endDate = new Date(pts[pts.length-1].t * 1000 - 1000).toISOString().split('T')[0];
     return { pct, startDate, endDate };
   } catch {
     return { pct: null, startDate: null };
@@ -1939,23 +1948,33 @@ async function mComputeRisk() {
     const start = periodStartMobile();
     const hist = await tapi(`/v2/account/portfolio/history?start=${start}T00:00:00Z&end=${TODAY_ISO()}T23:59:59Z&timeframe=1D&extended_hours=false`);
     if (hist && hist.timestamp && hist.timestamp.length) {
-      const pmap = {};
-      hist.timestamp.forEach((t,i) => { const e = hist.equity[i]; if (e != null && e > 0) pmap[new Date(t*1000).toISOString().split('T')[0]] = e; });
-      const pd = Object.keys(pmap).sort();
+      // Align by RAW TIMESTAMP, not date string: Alpaca stamps daily portfolio
+      // points at 8pm ET (= 00:00 UTC next day), so date keys would lag the
+      // benchmark by a day and flip the correlation negative.
+      const pPts = [];
+      hist.timestamp.forEach((t,i) => { const e = hist.equity[i]; if (e != null && e > 0) pPts.push({ ms: t*1000, eq: e }); });
+      pPts.sort((a,b) => a.ms - b.ms);
+
       const pAll = [];
-      for (let i=1;i<pd.length;i++){ const a=pmap[pd[i-1]], b=pmap[pd[i]]; if(a>0&&b>0) pAll.push(b/a-1); }
+      for (let i=1;i<pPts.length;i++){ const a=pPts[i-1].eq, b=pPts[i].eq; if(a>0&&b>0) pAll.push(b/a-1); }
       out.portVol3m = annFromRets(pAll);
       out.portVol1m = annFromRets(pAll.slice(-21));
 
       const corrWith = sym => {
-        const b = bmap[sym]; if (!b) return null;
-        const bm = {}; b.forEach(x => { bm[x.t.split('T')[0]] = x.c; });
+        const bars = bmap[sym]; if (!bars || !bars.length) return null;
+        const bseries = bars.map(x => ({ ms: new Date(x.t).getTime(), c: x.c })).sort((a,b)=>a.ms-b.ms);
+        let idx = 0, lastC = null; const paired = [];
+        for (const pt of pPts) {
+          let adv = false;
+          while (idx < bseries.length && bseries[idx].ms <= pt.ms) { lastC = bseries[idx].c; idx++; adv = true; }
+          if (lastC != null) paired.push({ eq: pt.eq, bc: lastC, advanced: adv });
+        }
         const pr=[], br=[];
-        for (let i=1;i<pd.length;i++){
-          const d0=pd[i-1], d1=pd[i];
-          if (bm[d0]==null||bm[d1]==null) continue;
-          if (!(pmap[d0]>0)||!(pmap[d1]>0)||!(bm[d0]>0)||!(bm[d1]>0)) continue;
-          pr.push(pmap[d1]/pmap[d0]-1); br.push(bm[d1]/bm[d0]-1);
+        for (let i=1;i<paired.length;i++){
+          const a=paired[i-1], b=paired[i];
+          if (!b.advanced) continue;
+          if (!(a.eq>0)||!(b.eq>0)||!(a.bc>0)||!(b.bc>0)) continue;
+          pr.push(b.eq/a.eq-1); br.push(b.bc/a.bc-1);
         }
         if (pr.length < 20) return null;
         const mp=pr.reduce((a,b2)=>a+b2,0)/pr.length, mb=br.reduce((a,b2)=>a+b2,0)/br.length;
