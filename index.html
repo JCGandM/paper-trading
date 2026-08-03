@@ -581,6 +581,12 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
             <button class="p-btn" data-p="YTD" onclick="loadChart('YTD')">YTD</button>
             <button class="p-btn" data-p="1A" onclick="loadChart('1A')">1Y</button>
             <button class="p-btn" data-p="ITD" onclick="loadChart('ITD')">ITD</button>
+            <span style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:10px;color:var(--dim)">
+              Inception:
+              <input id="inception-input" type="date" onchange="setInceptionDate(this.value)"
+                style="background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:3px;padding:2px 6px;font-size:10px">
+              <span id="inception-hint" style="font-size:9px;color:var(--dim)"></span>
+            </span>
             <div style="margin-left:auto;display:flex;align-items:center;gap:12px">
               <label class="bench-lbl">
                 <input type="checkbox" id="spy-chk" checked onchange="reloadChart()"> SPY
@@ -1008,7 +1014,7 @@ function applyPortfolio(id) {
   localStorage.setItem('pp_active_portfolio', id);
   loadSplitAdjustments();
   loadPositionMeta();
-  resolveInceptionDate();  // fetch & cache first-fill date (async, non-blocking)
+  // inception is an explicit setting; no auto-derivation
 }
 
 function savePortfolioList() {
@@ -2415,65 +2421,75 @@ function ytdStartDate() {
 }
 
 // Portfolio inception date — first daily log entry or first trade
-// Explicit trading inception date — the day of your FIRST trade ever.
-// Derived from the earliest fill in account history (fetched once, cached in
-// localStorage). This is the true economic start of the portfolio and works
-// for any account without hardcoding. Falls back to 2026-05-01 until resolved.
+// ── INCEPTION DATE ────────────────────────────────────────────────────
+// Your first real trading day. This is the anchor for ITD/YTD and for every
+// benchmark comparison, so it must be EXPLICIT and visible — auto-deriving it
+// from the earliest fill silently picked up stray old test trades and shifted
+// every benchmark by months.
+const DEFAULT_INCEPTION = '2026-05-01';
+
 function getInceptionDate() {
   try {
-    // 1) Manual override, if ever set
-    const override = localStorage.getItem(`pp_${activePortId}_inception`);
-    if (override && /^\d{4}-\d{2}-\d{2}$/.test(override)) return override;
-    // 2) Cached first-fill date (resolved asynchronously at load)
-    const cached = localStorage.getItem(`pp_${activePortId}_first_fill`);
-    if (cached && /^\d{4}-\d{2}-\d{2}$/.test(cached)) return cached;
+    const v = localStorage.getItem(`pp_${activePortId}_inception`);
+    if (v && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
   } catch {}
-  // 3) Fallback until the first-fill fetch completes
-  return '2026-05-01';
+  return DEFAULT_INCEPTION;
 }
 
-// Fetch the earliest fill date once and cache it. Called at load / portfolio switch.
-async function resolveInceptionDate() {
+function setInceptionDate(d) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) { alert('Use YYYY-MM-DD'); return; }
+  localStorage.setItem(`pp_${activePortId}_inception`, d);
+  Object.keys(benchCache).forEach(k => delete benchCache[k]);  // clear stale anchors
+  returnsCache = null;
+  const btn = document.querySelector('.p-btn.active');
+  if (btn) loadChart(btn.dataset.p);
+  if (typeof renderReturnsTab === 'function') renderReturnsTab();
+}
+
+// Suggest (do NOT auto-apply) the earliest fill date, shown next to the input.
+async function suggestInceptionFromFills() {
   try {
-    // If a manual override exists, respect it and skip the fetch
-    const override = localStorage.getItem(`pp_${activePortId}_inception`);
-    if (override && /^\d{4}-\d{2}-\d{2}$/.test(override)) return;
-
-    const prev = localStorage.getItem(`pp_${activePortId}_first_fill`);
-
-    // Earliest fill = first page in ascending order
-    const first = await tapi('/v2/account/activities/FILL?page_size=1&direction=asc');
-    if (Array.isArray(first) && first.length && first[0].transaction_time) {
-      const d = first[0].transaction_time.split('T')[0];
-      if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
-        localStorage.setItem(`pp_${activePortId}_first_fill`, d);
-        // If the resolved date changed what we were using, refresh the returns view
-        if (d !== prev) {
-          const activeTab = document.querySelector('.tab-panel:not([style*="none"])')?.id;
-          if (typeof renderReturnsTab === 'function' && activeTab === 'tab-returns') renderReturnsTab();
-          const chartPeriodBtn = document.querySelector('.p-btn.active');
-          if (chartPeriodBtn && typeof loadChart === 'function') loadChart(chartPeriodBtn.dataset.p);
-        }
-      }
+    const f = await tapi('/v2/account/activities/FILL?page_size=1&direction=asc');
+    if (Array.isArray(f) && f.length && f[0].transaction_time) {
+      const d = f[0].transaction_time.split('T')[0];
+      const el = document.getElementById('inception-hint');
+      if (el) el.textContent = `first fill on record: ${d}`;
     }
-  } catch { /* keep fallback */ }
+  } catch {}
 }
 
 // Build Alpaca portfolio/history URL — YTD needs special handling
+// ── SINGLE SOURCE OF TRUTH for period start dates ────────────────────
+// Every period resolves to an explicit ISO date, CLAMPED to inception.
+// The same date drives the portfolio request AND the benchmark anchor, so
+// they can never diverge. This replaces inferring the anchor from whatever
+// timestamps Alpaca happens to return (the cause of period-to-period drift).
+function periodStartDate(period) {
+  const inception = getInceptionDate();
+  const now = new Date();
+  const iso = d => d.toISOString().split('T')[0];
+  let start;
+
+  switch (period) {
+    case '1D':  { const d = new Date(now); d.setDate(d.getDate() - 1);  start = iso(d); break; }
+    case '1W':  { const d = new Date(now); d.setDate(d.getDate() - 7);  start = iso(d); break; }
+    case '1M':  { const d = new Date(now); d.setMonth(d.getMonth() - 1); start = iso(d); break; }
+    case '3M':  { const d = new Date(now); d.setMonth(d.getMonth() - 3); start = iso(d); break; }
+    case '6M':  { const d = new Date(now); d.setMonth(d.getMonth() - 6); start = iso(d); break; }
+    case '1A':  { const d = new Date(now); d.setFullYear(d.getFullYear() - 1); start = iso(d); break; }
+    case 'YTD': { start = iso(new Date(now.getFullYear(), 0, 1)); break; }
+    case 'ITD':
+    default:    { start = inception; break; }
+  }
+  // Clamp: you cannot have performance before you started trading.
+  return (start < inception) ? inception : start;
+}
+
 function historyUrl(period, tf) {
-  if (period === 'YTD') {
-    const start = ytdStartDate();
-    // Alpaca requires RFC3339 format for the start parameter
-    return `/v2/account/portfolio/history?start=${start}T00:00:00Z&timeframe=${tf}&extended_hours=false`;
-  }
-  if (period === 'ITD') {
-    // Inception to date — span from your explicit first trading day (5/1/26),
-    // NOT account creation (which may include flat pre-trading cash days that
-    // wrongly inflate benchmark returns).
-    const start = getInceptionDate();
-    return `/v2/account/portfolio/history?start=${start}T00:00:00Z&timeframe=${tf}&extended_hours=false`;
-  }
-  return `/v2/account/portfolio/history?period=${period}&timeframe=${tf}&extended_hours=false`;
+  // ALL periods now use an explicit start date — no more `period=` shorthand,
+  // which returned pre-inception padding and skewed the benchmark anchor.
+  const start = periodStartDate(period);
+  return `/v2/account/portfolio/history?start=${start}T00:00:00Z&timeframe=${tf}&extended_hours=false`;
 }
 
 // ── SPLIT CORRECTION FOR CHART ────────────────────────────────────────────
@@ -2574,23 +2590,9 @@ async function loadChart(period) {
       return;
     }
 
-    // ── Trim leading "flat cash" points ──────────────────────────────
-    // For long ranges (ITD especially), Alpaca returns days BEFORE you started
-    // trading where equity is just your initial cash sitting flat. Those days
-    // have 0% portfolio return but the benchmark (QQQ/SPY) was moving — which
-    // wrongly inflates the benchmark's return over the period. Anchor the whole
-    // chart to the first day your equity actually STARTED MOVING (first real
-    // trading activity), so portfolio and benchmark share a true start.
-    if (rawPts.length > 3) {
-      const firstEq = rawPts[0].e;
-      // Find first index where equity differs from the initial flat value by >0.01%
-      let startIdx = 0;
-      for (let i = 1; i < rawPts.length; i++) {
-        if (Math.abs(rawPts[i].e - firstEq) / firstEq > 0.0001) { startIdx = i - 1; break; }
-      }
-      // Only trim if there were genuinely flat leading days (startIdx moved forward)
-      if (startIdx > 0) rawPts = rawPts.slice(startIdx);
-    }
+    // NOTE: no flat-cash heuristic needed. periodStartDate() clamps every window
+    // to inception, so Alpaca never returns pre-trading padding in the first place.
+    // (The old "detect when equity started moving" trick broke on tiny blips.)
 
     const timestamps  = rawPts.map(p => p.t);
     const rawEquities = rawPts.map(p => p.e);
@@ -2618,13 +2620,17 @@ async function loadChart(period) {
 
     const startDate = new Date(rawPts[0].t * 1000).toISOString().split('T')[0];
 
-    // ── Step 4: Fetch benchmarks aligned to the portfolio's timestamps ──
+    // ── Step 4: Fetch benchmarks anchored to the SAME explicit period start ──
+    const anchorDate = periodStartDate(period);
+    // Keep the visible inception control in sync
+    const incEl = document.getElementById('inception-input');
+    if (incEl && !incEl.value) { incEl.value = getInceptionDate(); suggestInceptionFromFills(); }
     const [spyPcts, qqqPcts] = await Promise.all([
       document.getElementById('spy-chk').checked
-        ? fetchBenchmarkAligned('SPY', timestamps, tf)
+        ? fetchBenchmarkAligned('SPY', timestamps, tf, anchorDate)
         : Promise.resolve(null),
       document.getElementById('qqq-chk').checked
-        ? fetchBenchmarkAligned('QQQ', timestamps, tf)
+        ? fetchBenchmarkAligned('QQQ', timestamps, tf, anchorDate)
         : Promise.resolve(null)
     ]);
 
@@ -2656,8 +2662,8 @@ async function loadChart(period) {
     // Helps verify the historical data is correct across timeframes.
     const dg = window._benchDiag || {};
     const diagParts = [];
-    if (dg.QQQ) diagParts.push(`QQQ: base $${dg.QQQ.base} (${dg.QQQ.baseDate}) → $${dg.QQQ.lastClose} · ${dg.QQQ.barCount} bars · ${dg.QQQ.feed}`);
-    if (dg.SPY) diagParts.push(`SPY: base $${dg.SPY.base} (${dg.SPY.baseDate}) → $${dg.SPY.lastClose} · ${dg.SPY.feed}`);
+    if (dg.QQQ) diagParts.push(`QQQ: anchor ${dg.QQQ.anchor} · base $${dg.QQQ.base} (${dg.QQQ.baseDate}) → $${dg.QQQ.lastClose} · ${dg.QQQ.feed}`);
+    if (dg.SPY) diagParts.push(`SPY: base $${dg.SPY.base} (${dg.SPY.baseDate}) · ${dg.SPY.feed}`);
     if (diagParts.length) {
       statsEl.innerHTML += `<div style="width:100%;margin-top:8px;font-size:9px;color:var(--dim);font-family:'IBM Plex Mono',monospace;border-top:1px solid var(--border);padding-top:6px">🔎 ${diagParts.join(' &nbsp;|&nbsp; ')}</div>`;
     }
@@ -2691,8 +2697,11 @@ async function fetchBarsReliable(pathBase) {
   }
 }
 
-async function fetchBenchmarkAligned(sym, portTimestamps, tf) {
-  const startDate = new Date(portTimestamps[0] * 1000).toISOString().split('T')[0];
+async function fetchBenchmarkAligned(sym, portTimestamps, tf, anchorDate) {
+  // anchorDate is the AUTHORITATIVE period start (from periodStartDate).
+  // The benchmark baseline is the close on/before this date — never inferred
+  // from portTimestamps, which vary with Alpaca's response padding.
+  const startDate = anchorDate || new Date(portTimestamps[0] * 1000).toISOString().split('T')[0];
   const endDate   = new Date(portTimestamps[portTimestamps.length - 1] * 1000).toISOString().split('T')[0];
   const key = `${sym}_${tf}_${startDate}_${endDate}_aligned`;
   const now = Date.now();
@@ -2701,8 +2710,6 @@ async function fetchBenchmarkAligned(sym, portTimestamps, tf) {
 
   try {
     const atf = dataTF[tf] || '1Day';
-    const isIntraday = atf !== '1Day';
-    // Fetch from a week before the portfolio start so a proper baseline exists.
     const sd = new Date(startDate + 'T00:00:00Z');
     sd.setUTCDate(sd.getUTCDate() - 7);
     const fetchStart = sd.toISOString().split('T')[0];
@@ -2710,24 +2717,23 @@ async function fetchBenchmarkAligned(sym, portTimestamps, tf) {
     const bars = data?.bars;
     if (!bars || bars.length < 2) return null;
 
-    // Ordered list of {ms, close} in chronological order (ms = bar time in epoch ms)
     const ordered = bars
       .map(b => ({ ms: new Date(b.t).getTime(), c: b.c }))
       .sort((a, b) => a.ms - b.ms);
 
-    // Baseline = close of the last bar at or before the portfolio's FIRST point.
-    // Using raw timestamps (ms) avoids date-string/timezone mismatch entirely.
-    const firstMs = portTimestamps[0] * 1000;
-    let base = null;
-    for (const o of ordered) { if (o.ms <= firstMs) base = o.c; else break; }
-    if (base == null) base = ordered[0].c;  // portfolio predates benchmark data
+    // Baseline = close of the last bar at or before the ANCHOR DATE (end of that day)
+    const anchorMs = new Date(startDate + 'T23:59:59Z').getTime();
+    let base = null, baseMs = null;
+    for (const o of ordered) { if (o.ms <= anchorMs) { base = o.c; baseMs = o.ms; } else break; }
+    if (base == null) { base = ordered[0].c; baseMs = ordered[0].ms; }
 
     // Diagnostic: record what this benchmark used so we can surface it in the UI
     window._benchDiag = window._benchDiag || {};
     window._benchDiag[sym] = {
       feed: window._lastFeed || '?',
       base: base.toFixed(2),
-      baseDate: new Date(ordered.find(o => o.c === base)?.ms || firstMs).toISOString().split('T')[0],
+      baseDate: new Date(baseMs).toISOString().split('T')[0],
+      anchor: startDate,
       lastClose: ordered[ordered.length - 1].c.toFixed(2),
       barCount: ordered.length,
     };
@@ -4289,8 +4295,8 @@ async function renderReturnsTab() {
   const portITD = itdResult.pct;
   // Benchmark start dates aligned to the ACTUAL first date of each portfolio series,
   // so portfolio and index cover the identical window (this was the bug).
-  const ytdStart = ytdResult.startDate || ytdStartDate();
-  const itdStart = itdResult.startDate || getInceptionDate();
+  const ytdStart = periodStartDate('YTD');
+  const itdStart = periodStartDate('ITD');
 
   // Update note
   document.getElementById('ret-note').textContent =
@@ -4399,16 +4405,7 @@ async function portfolioReturnFromHistory(period) {
       .filter(p => p.e != null && p.e > 0);
     if (rawPts.length < 2) return { pct: null, startDate: null };
 
-    // Trim leading flat-cash days (see loadChart): anchor to first real activity
-    // so the benchmark start date matches when you were actually invested.
-    if (rawPts.length > 3) {
-      const firstEq = rawPts[0].e;
-      let startIdx = 0;
-      for (let i = 1; i < rawPts.length; i++) {
-        if (Math.abs(rawPts[i].e - firstEq) / firstEq > 0.0001) { startIdx = i - 1; break; }
-      }
-      if (startIdx > 0) rawPts = rawPts.slice(startIdx);
-    }
+    // No flat-cash trim needed — periodStartDate() clamps to inception upstream.
 
     const timestamps  = rawPts.map(p => p.t);
     const rawEquities = rawPts.map(p => p.e);
