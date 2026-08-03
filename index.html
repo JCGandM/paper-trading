@@ -2622,8 +2622,7 @@ async function fetchBenchmarkAligned(sym, portTimestamps, tf) {
   try {
     const atf = dataTF[tf] || '1Day';
     const isIntraday = atf !== '1Day';
-    // Fetch a few days before the portfolio start so we can establish a proper
-    // baseline bar on-or-before the portfolio's first date.
+    // Fetch from a week before the portfolio start so a proper baseline exists.
     const sd = new Date(startDate + 'T00:00:00Z');
     sd.setUTCDate(sd.getUTCDate() - 7);
     const fetchStart = sd.toISOString().split('T')[0];
@@ -2631,38 +2630,30 @@ async function fetchBenchmarkAligned(sym, portTimestamps, tf) {
     const bars = data?.bars;
     if (!bars || bars.length < 2) return null;
 
-    // Build an ordered list of {key, close} for lookup and baseline search
-    const keyOf = (iso) => isIntraday
-      ? new Date(iso).toISOString().slice(0, 13)
-      : new Date(iso).toISOString().slice(0, 10);
-    const ordered = bars.map(b => ({ k: keyOf(b.t), c: b.c }));
+    // Ordered list of {ms, close} in chronological order (ms = bar time in epoch ms)
+    const ordered = bars
+      .map(b => ({ ms: new Date(b.t).getTime(), c: b.c }))
+      .sort((a, b) => a.ms - b.ms);
 
-    // Baseline = close of the last bar ON OR BEFORE the portfolio start date.
-    // This rebases the benchmark to the SAME start as the portfolio, fixing skew.
-    const startKey = isIntraday ? keyOf(new Date(portTimestamps[0] * 1000).toISOString()) : startDate;
+    // Baseline = close of the last bar at or before the portfolio's FIRST point.
+    // Using raw timestamps (ms) avoids date-string/timezone mismatch entirely.
+    const firstMs = portTimestamps[0] * 1000;
     let base = null;
-    for (const o of ordered) {
-      if (o.k <= startKey) base = o.c; else break;
-    }
+    for (const o of ordered) { if (o.ms <= firstMs) base = o.c; else break; }
     if (base == null) base = ordered[0].c;  // portfolio predates benchmark data
 
-    // Map each benchmark key → cumulative % return from the rebased baseline
-    const benchByKey = new Map();
-    for (const o of ordered) benchByKey.set(o.k, (o.c - base) / base * 100);
-
-    // For each portfolio point, use the benchmark value at that date/hour,
-    // carrying forward the last known value across gaps.
-    let lastVal = 0;
+    // For each portfolio point, find the benchmark close at or before that point's
+    // time (nearest prior bar). This mirrors the portfolio's own points exactly —
+    // no leading zeros, no plateau artifacts from granularity mismatch.
+    let idx = 0;
+    let lastClose = base;
     const series = portTimestamps.map(ts => {
-      const k = keyOf(new Date(ts * 1000).toISOString());
-      if (benchByKey.has(k)) { lastVal = benchByKey.get(k); }
-      else {
-        // nearest prior bar (ordered is chronological)
-        let found = null;
-        for (const o of ordered) { if (o.k <= k) found = benchByKey.get(o.k); else break; }
-        if (found != null) lastVal = found;
+      const ms = ts * 1000;
+      while (idx < ordered.length && ordered[idx].ms <= ms) {
+        lastClose = ordered[idx].c;
+        idx++;
       }
-      return parseFloat(lastVal.toFixed(3));
+      return parseFloat(((lastClose - base) / base * 100).toFixed(3));
     });
 
     benchCache[key] = { series, ts: now };
