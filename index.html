@@ -2613,42 +2613,54 @@ async function loadChart(period) {
 // This guarantees the plotted line and the end-of-series stat agree.
 async function fetchBenchmarkAligned(sym, portTimestamps, tf) {
   const startDate = new Date(portTimestamps[0] * 1000).toISOString().split('T')[0];
-  const key = `${sym}_${tf}_${startDate}_aligned`;
+  const endDate   = new Date(portTimestamps[portTimestamps.length - 1] * 1000).toISOString().split('T')[0];
+  const key = `${sym}_${tf}_${startDate}_${endDate}_aligned`;
   const now = Date.now();
   const cached = benchCache[key];
   if (cached && (now - cached.ts) < BENCH_TTL) return cached.series;
 
   try {
     const atf = dataTF[tf] || '1Day';
-    // Fetch generously; align by date afterward
-    const data = await dapi(`/v2/stocks/${sym}/bars?timeframe=${atf}&start=${startDate}&limit=1000&feed=iex&adjustment=split`);
+    const isIntraday = atf !== '1Day';
+    // Fetch a few days before the portfolio start so we can establish a proper
+    // baseline bar on-or-before the portfolio's first date.
+    const sd = new Date(startDate + 'T00:00:00Z');
+    sd.setUTCDate(sd.getUTCDate() - 7);
+    const fetchStart = sd.toISOString().split('T')[0];
+    const data = await dapi(`/v2/stocks/${sym}/bars?timeframe=${atf}&start=${fetchStart}&limit=2000&feed=iex&adjustment=split`);
     const bars = data?.bars;
     if (!bars || bars.length < 2) return null;
 
-    const base = bars[0].c;
-    // Build a date/time → cumulative-return lookup from the benchmark bars
-    const isIntraday = atf !== '1Day';
-    const benchByKey = new Map();
-    for (const b of bars) {
-      const d = new Date(b.t);
-      const k = isIntraday
-        ? d.toISOString().slice(0, 13)          // align to the hour for intraday
-        : d.toISOString().slice(0, 10);         // align to the day for daily
-      benchByKey.set(k, (b.c - base) / base * 100);
-    }
+    // Build an ordered list of {key, close} for lookup and baseline search
+    const keyOf = (iso) => isIntraday
+      ? new Date(iso).toISOString().slice(0, 13)
+      : new Date(iso).toISOString().slice(0, 10);
+    const ordered = bars.map(b => ({ k: keyOf(b.t), c: b.c }));
 
-    // For each portfolio timestamp, find the benchmark return at the same date/hour.
-    // Carry forward the last known value if a bar is missing (holiday/gap).
+    // Baseline = close of the last bar ON OR BEFORE the portfolio start date.
+    // This rebases the benchmark to the SAME start as the portfolio, fixing skew.
+    const startKey = isIntraday ? keyOf(new Date(portTimestamps[0] * 1000).toISOString()) : startDate;
+    let base = null;
+    for (const o of ordered) {
+      if (o.k <= startKey) base = o.c; else break;
+    }
+    if (base == null) base = ordered[0].c;  // portfolio predates benchmark data
+
+    // Map each benchmark key → cumulative % return from the rebased baseline
+    const benchByKey = new Map();
+    for (const o of ordered) benchByKey.set(o.k, (o.c - base) / base * 100);
+
+    // For each portfolio point, use the benchmark value at that date/hour,
+    // carrying forward the last known value across gaps.
     let lastVal = 0;
     const series = portTimestamps.map(ts => {
-      const d = new Date(ts * 1000);
-      const k = isIntraday ? d.toISOString().slice(0, 13) : d.toISOString().slice(0, 10);
-      if (benchByKey.has(k)) lastVal = benchByKey.get(k);
+      const k = keyOf(new Date(ts * 1000).toISOString());
+      if (benchByKey.has(k)) { lastVal = benchByKey.get(k); }
       else {
-        // find nearest prior bar key
-        for (const [bk, bv] of benchByKey) {
-          if (bk <= k) lastVal = bv; else break;
-        }
+        // nearest prior bar (ordered is chronological)
+        let found = null;
+        for (const o of ordered) { if (o.k <= k) found = benchByKey.get(o.k); else break; }
+        if (found != null) lastVal = found;
       }
       return parseFloat(lastVal.toFixed(3));
     });
