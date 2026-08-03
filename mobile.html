@@ -890,6 +890,15 @@
         <div class="stat-card"><div class="sc-label">YTD Alpha vs QQQ</div><div class="sc-val" id="ra-alpha-qqq" style="font-size:16px">—</div></div>
       </div>
 
+      <div class="section-hdr" style="margin-top:6px">Risk <span id="m-risk-note" style="font-weight:400;font-size:10px;color:var(--dim)">annualised</span></div>
+      <div class="stats-grid" style="grid-template-columns:1fr 1fr">
+        <div class="stat-card"><div class="sc-label">Vol (1M)</div><div class="sc-val" id="m-vol1m" style="font-size:16px">—</div></div>
+        <div class="stat-card"><div class="sc-label">Vol (3M)</div><div class="sc-val" id="m-vol3m" style="font-size:16px">—</div></div>
+        <div class="stat-card"><div class="sc-label">Corr vs SPY</div><div class="sc-val" id="m-corr-spy" style="font-size:16px">—</div></div>
+        <div class="stat-card"><div class="sc-label">Corr vs QQQ</div><div class="sc-val" id="m-corr-qqq" style="font-size:16px">—</div></div>
+      </div>
+      <div class="compliance-card" id="m-risk-list" style="margin-top:8px"><div style="padding:14px;text-align:center;color:var(--dim);font-size:12px">Computing…</div></div>
+
       <div class="section-hdr" style="margin-top:6px">Monthly Returns</div>
       <div class="compliance-card" id="ra-monthly"><div style="padding:14px;text-align:center;color:var(--dim);font-size:12px">No log data yet</div></div>
 
@@ -1898,6 +1907,112 @@ async function renderHeroReturns(currentEqRaw) {
   }
 }
 
+// ── Risk metrics (mobile) — vol & correlation, mirrors desktop ──
+let mRiskCache = null;
+const M_RISK_TTL = 15 * 60 * 1000;
+
+async function mComputeRisk() {
+  const syms = cachedPositions.map(p => p.symbol);
+  const key = syms.slice().sort().join(',');
+  if (mRiskCache && mRiskCache.key === key && (Date.now() - mRiskCache.ts) < M_RISK_TTL) return mRiskCache.data;
+
+  const out = { volBySym: {}, portVol1m: null, portVol3m: null, corrSPY: null, corrQQQ: null };
+  try {
+    const sd0 = new Date(); sd0.setDate(sd0.getDate() - 130);
+    const sd = sd0.toISOString().split('T')[0];
+    const bd = await fetchBarsReliableMobile(
+      `/v2/stocks/bars?symbols=${encodeURIComponent(syms.concat(['SPY','QQQ']).join(','))}&timeframe=1Day&start=${sd}&limit=10000&adjustment=split`);
+    const bmap = (bd && bd.bars) || {};
+    const rets  = a => { const r=[]; for(let i=1;i<a.length;i++) if(a[i-1]>0) r.push(a[i]/a[i-1]-1); return r; };
+    const stdev = a => { if(a.length<2) return null; const m=a.reduce((x,y)=>x+y,0)/a.length;
+                         return Math.sqrt(a.reduce((t,x)=>t+(x-m)*(x-m),0)/(a.length-1)); };
+    const annFromRets = r => { const sv=stdev(r); return sv==null?null:sv*Math.sqrt(252)*100; };
+    const annVol = (c,n) => annFromRets(rets(c.slice(-(n+1))));
+
+    syms.forEach(sym => {
+      const b = bmap[sym];
+      if (!b || b.length < 6) return;
+      const c = b.map(x => x.c);
+      out.volBySym[sym] = { v1m: annVol(c,21), v3m: annVol(c,63) };
+    });
+
+    const start = periodStartMobile();
+    const hist = await tapi(`/v2/account/portfolio/history?start=${start}T00:00:00Z&end=${TODAY_ISO()}T23:59:59Z&timeframe=1D&extended_hours=false`);
+    if (hist && hist.timestamp && hist.timestamp.length) {
+      const pmap = {};
+      hist.timestamp.forEach((t,i) => { const e = hist.equity[i]; if (e != null && e > 0) pmap[new Date(t*1000).toISOString().split('T')[0]] = e; });
+      const pd = Object.keys(pmap).sort();
+      const pAll = [];
+      for (let i=1;i<pd.length;i++){ const a=pmap[pd[i-1]], b=pmap[pd[i]]; if(a>0&&b>0) pAll.push(b/a-1); }
+      out.portVol3m = annFromRets(pAll);
+      out.portVol1m = annFromRets(pAll.slice(-21));
+
+      const corrWith = sym => {
+        const b = bmap[sym]; if (!b) return null;
+        const bm = {}; b.forEach(x => { bm[x.t.split('T')[0]] = x.c; });
+        const pr=[], br=[];
+        for (let i=1;i<pd.length;i++){
+          const d0=pd[i-1], d1=pd[i];
+          if (bm[d0]==null||bm[d1]==null) continue;
+          if (!(pmap[d0]>0)||!(pmap[d1]>0)||!(bm[d0]>0)||!(bm[d1]>0)) continue;
+          pr.push(pmap[d1]/pmap[d0]-1); br.push(bm[d1]/bm[d0]-1);
+        }
+        if (pr.length < 20) return null;
+        const mp=pr.reduce((a,b2)=>a+b2,0)/pr.length, mb=br.reduce((a,b2)=>a+b2,0)/br.length;
+        let cv=0,dp=0,db=0;
+        for(let i=0;i<pr.length;i++){const a=pr[i]-mp,b2=br[i]-mb;cv+=a*b2;dp+=a*a;db+=b2*b2;}
+        return (dp>0&&db>0)? cv/Math.sqrt(dp*db) : null;
+      };
+      out.corrSPY = corrWith('SPY');
+      out.corrQQQ = corrWith('QQQ');
+    }
+  } catch(e) { /* leave nulls */ }
+  mRiskCache = { key, ts: Date.now(), data: out };
+  return out;
+}
+// 3-month window start, clamped to inception
+function periodStartMobile() {
+  const d = new Date(); d.setMonth(d.getMonth() - 3);
+  const s3 = d.toISOString().split('T')[0];
+  const inc = getInceptionDate();
+  return s3 < inc ? inc : s3;
+}
+
+async function renderMobileRisk() {
+  const f = (v, suf) => (v == null || isNaN(v)) ? '—' : v.toFixed(2) + (suf || '');
+  const set = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+  const list = document.getElementById('m-risk-list');
+  try {
+    const rm = await mComputeRisk();
+    set('m-vol1m', f(rm.portVol1m,'%'));
+    set('m-vol3m', f(rm.portVol3m,'%'));
+    set('m-corr-spy', f(rm.corrSPY));
+    set('m-corr-qqq', f(rm.corrQQQ));
+
+    const eq = cachedEquity + getSplitEquityDelta(cachedPositions);
+    const rows = cachedPositions.map(p => {
+      const ap = applyMobileSplit(p);
+      const w  = eq ? Math.abs(parseFloat(ap.market_value)) / eq : 0;
+      const v  = rm.volBySym[p.symbol] || {};
+      return { sym: p.symbol, w, v3m: v.v3m, v1m: v.v1m, contrib: v.v3m != null ? w * v.v3m : null };
+    }).sort((a,b) => (b.contrib ?? -1) - (a.contrib ?? -1));
+
+    if (list) list.innerHTML = rows.length ? rows.map(r => `
+      <div class="comp-row">
+        <span class="comp-label" style="flex:1">${r.sym}
+          <span style="font-size:9px;color:var(--dim)">${(r.w*100).toFixed(1)}% wt</span>
+        </span>
+        <span style="font-size:12px;text-align:right">
+          <b>${f(r.v3m,'%')}</b><br>
+          <span style="font-size:9px;color:var(--dim)">1M ${f(r.v1m,'%')} · contrib ${f(r.contrib,'%')}</span>
+        </span>
+      </div>`).join('')
+      : '<div style="padding:14px;text-align:center;color:var(--dim);font-size:12px">No positions</div>';
+  } catch(e) {
+    if (list) list.innerHTML = '<div style="padding:14px;text-align:center;color:var(--red);font-size:12px">Risk data unavailable</div>';
+  }
+}
+
 async function renderReturnsAnalytics() {
   const sorted = [...dailyLog].sort((a, b) => a.date.localeCompare(b.date));
   const today  = new Date().toISOString().split('T')[0];
@@ -2104,7 +2219,7 @@ function switchTab(tab) {
   document.getElementById('positions-section').classList.toggle('hidden', tab !== 'positions');
   document.getElementById('analytics-screen').classList.toggle('visible', tab === 'analytics');
   // Render analytics on first open or refresh
-  if (tab === 'analytics') { renderAnalytics(); loadMobileRealizedPnL(); renderReturnsAnalytics(); }
+  if (tab === 'analytics') { renderAnalytics(); loadMobileRealizedPnL(); renderReturnsAnalytics(); renderMobileRisk(); }
 }
 
 function renderAnalytics() {
