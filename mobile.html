@@ -1065,40 +1065,20 @@ function ytdStartDate() {
   return (inception && inception > jan1) ? inception : jan1;
 }
 
-// Inception = the day of your FIRST fill ever (cached), matching desktop.
-// Falls back to 2026-05-01 until resolved.
+// Inception = your first real trading day. EXPLICIT, not auto-derived —
+// deriving it from the earliest fill picked up stray old trades and shifted
+// every benchmark by months. Matches desktop.
+const DEFAULT_INCEPTION = '2026-05-01';
+const TODAY_ISO = () => new Date().toISOString().split('T')[0];
+
 function getInceptionDate() {
   try {
-    const override = localStorage.getItem(`pp_${ACTIVE_ID}_inception`);
-    if (override && /^\d{4}-\d{2}-\d{2}$/.test(override)) return override;
-    const cached = localStorage.getItem(`pp_${ACTIVE_ID}_first_fill`);
-    if (cached && /^\d{4}-\d{2}-\d{2}$/.test(cached)) return cached;
+    const v = localStorage.getItem(`pp_${ACTIVE_ID}_inception`);
+    if (v && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
   } catch {}
-  return '2026-05-01';
+  return DEFAULT_INCEPTION;
 }
 
-// Fetch & cache the earliest fill date once (async, non-blocking).
-async function resolveInceptionDate() {
-  try {
-    const override = localStorage.getItem(`pp_${ACTIVE_ID}_inception`);
-    if (override && /^\d{4}-\d{2}-\d{2}$/.test(override)) return;
-    const prev = localStorage.getItem(`pp_${ACTIVE_ID}_first_fill`);
-    const first = await tapi('/v2/account/activities/FILL?page_size=1&direction=asc');
-    if (Array.isArray(first) && first.length && first[0].transaction_time) {
-      const d = first[0].transaction_time.split('T')[0];
-      if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
-        localStorage.setItem(`pp_${ACTIVE_ID}_first_fill`, d);
-        // Re-render returns if the resolved date changed and analytics is open
-        if (d !== prev && currentTab === 'analytics') {
-          if (typeof renderReturnsAnalytics === 'function') renderReturnsAnalytics();
-        }
-        if (d !== prev && typeof renderHeroReturns === 'function') {
-          renderHeroReturns(cachedEquity + getSplitEquityDelta(cachedPositions));
-        }
-      }
-    }
-  } catch { /* keep fallback */ }
-}
 function portReturnOverLog(entries) {
   if (!entries.length) return null;
   const start = entries[0].equity, end = entries[entries.length - 1].equity;
@@ -1134,7 +1114,7 @@ async function fetchBenchmarkReturn(sym, startDate, endDate) {
     const sd = new Date(startDate + 'T00:00:00Z');
     sd.setUTCDate(sd.getUTCDate() - 5);
     const fetchStart = sd.toISOString().split('T')[0];
-    const data = await dapi(`/v2/stocks/${encodeURIComponent(sym)}/bars?timeframe=1Day&start=${fetchStart}&end=${endDate}&limit=400&feed=iex&adjustment=split`);
+    const data = await fetchBarsReliableMobile(`/v2/stocks/${encodeURIComponent(sym)}/bars?timeframe=1Day&start=${fetchStart}&end=${endDate}&limit=400&adjustment=split`);
     const bars = data?.bars;
     if (!bars || bars.length < 2) return null;
     let baseBar = null;
@@ -1664,6 +1644,12 @@ function updateCapPreview() {
 function clearError() { document.getElementById('ot-error').textContent = ''; }
 
 // Fresh ask price at submit time (not cached)
+// Historical bars with the reliable consolidated feed; IEX only as fallback.
+async function fetchBarsReliableMobile(pathBase) {
+  try { return await dapi(`${pathBase}&feed=sip`); }
+  catch { try { return await dapi(`${pathBase}&feed=iex`); } catch { return null; } }
+}
+
 async function getFreshAskMobile(sym) {
   try {
     const snap = await req(DATA_BASE, `/v2/stocks/${encodeURIComponent(sym)}/snapshot?feed=iex`);
@@ -1798,6 +1784,7 @@ function showOtError(msg) {
 // ══════════════════════════════════════
 // RETURNS (YTD / ITD / benchmark) — ported from desktop
 // ══════════════════════════════════════
+const BUILD_ID = 'v8-2026-08-03-end-date-fix';
 let benchCache = null;  // { ts, spyYTD, qqqYTD, spyITD, qqqITD }
 const BENCH_TTL = 15 * 60 * 1000;  // 15 min
 
@@ -1838,11 +1825,11 @@ async function mobilePortfolioReturn(period) {
     let url;
     if (period === 'YTD') {
       const start = ytdStartDate();
-      url = `/v2/account/portfolio/history?start=${start}T00:00:00Z&timeframe=1D&extended_hours=false`;
+      url = `/v2/account/portfolio/history?start=${start}T00:00:00Z&end=${TODAY_ISO()}T23:59:59Z&timeframe=1D&extended_hours=false`;
     } else {
-      // ITD — span from your first-fill inception, not a generic 1-year window
+      // ITD — span from inception
       const start = getInceptionDate();
-      url = `/v2/account/portfolio/history?start=${start}T00:00:00Z&timeframe=1D&extended_hours=false`;
+      url = `/v2/account/portfolio/history?start=${start}T00:00:00Z&end=${TODAY_ISO()}T23:59:59Z&timeframe=1D&extended_hours=false`;
     }
     const hist = await tapi(url);
     if (!hist?.timestamp?.length) return { pct: null, startDate: null };
@@ -1868,7 +1855,8 @@ async function mobilePortfolioReturn(period) {
     const end  = currentCorrected > 0 ? currentCorrected : pts[pts.length - 1].e;
     const pct  = base > 0 ? (end - base) / base * 100 : null;
     const startDate = new Date(pts[0].t * 1000).toISOString().split('T')[0];
-    return { pct, startDate };
+    const endDate   = new Date(pts[pts.length-1].t * 1000).toISOString().split('T')[0];
+    return { pct, startDate, endDate };
   } catch {
     return { pct: null, startDate: null };
   }
@@ -1923,9 +1911,18 @@ async function renderReturnsAnalytics() {
   const itdStart = itd.startDate || ytdStart;
 
   const note = document.getElementById('ret-note');
-  if (note) note.textContent = ytd.startDate
-    ? `Alpaca portfolio history · since ${ytdStart}`
-    : 'Portfolio history unavailable';
+  if (note) {
+    // Guard: if the series ends days ago, returns are measured to a stale date.
+    let stale = '';
+    if (ytd.endDate) {
+      const days = (Date.now() - new Date(ytd.endDate + 'T23:59:59Z').getTime()) / 86400000;
+      if (days > 4) stale = ` ⚠ data ends ${ytd.endDate}`;
+    }
+    note.textContent = ytd.startDate
+      ? `since ${ytdStart}${stale}`
+      : 'Portfolio history unavailable';
+    note.style.color = stale ? 'var(--red)' : 'var(--dim)';
+  }
 
   const setCell = (id, v) => {
     const el = document.getElementById(id);
@@ -2206,9 +2203,6 @@ function renderAnalytics() {
   }
 
   setText('port-name', PORTFOLIO_NAME);
-
-  // Resolve inception date (first-fill) once, then initial load
-  resolveInceptionDate();
 
   // Initial load
   refresh();
