@@ -2409,6 +2409,9 @@ const dataTF   = { '15Min':'15Min', '1H':'1Hour', '1D':'1Day' };
 
 // Benchmark cache: { 'SPY_1M_2025-01-01': { pcts: [...], ts: epoch } }
 const benchCache = {};
+// Build stamp — shown in the chart diagnostic so you can confirm at a glance
+// which version of the file is actually live (catches failed deploys / stale cache).
+const BUILD_ID = 'v7-2026-08-03-anchor-clamp';
 const BENCH_TTL  = 60 * 60 * 1000; // 1 hour — re-fetch if older
 
 function ytdStartDate() {
@@ -2664,8 +2667,24 @@ async function loadChart(period) {
     const diagParts = [];
     if (dg.QQQ) diagParts.push(`QQQ: anchor ${dg.QQQ.anchor} · base $${dg.QQQ.base} (${dg.QQQ.baseDate}) → $${dg.QQQ.lastClose} · ${dg.QQQ.feed}`);
     if (dg.SPY) diagParts.push(`SPY: base $${dg.SPY.base} (${dg.SPY.baseDate}) · ${dg.SPY.feed}`);
-    if (diagParts.length) {
-      statsEl.innerHTML += `<div style="width:100%;margin-top:8px;font-size:9px;color:var(--dim);font-family:'IBM Plex Mono',monospace;border-top:1px solid var(--border);padding-top:6px">🔎 ${diagParts.join(' &nbsp;|&nbsp; ')}</div>`;
+
+    // Self-check: the base bar must be within ~10 days of the anchor. If it's
+    // further, the anchor is being ignored somewhere — flag it loudly instead
+    // of quietly reporting a wrong return.
+    let warn = '';
+    if (dg.QQQ && dg.QQQ.anchor && dg.QQQ.baseDate) {
+      const gapDays = Math.abs(
+        (new Date(dg.QQQ.baseDate) - new Date(dg.QQQ.anchor)) / 86400000
+      );
+      if (gapDays > 10) {
+        warn = `<div style="width:100%;margin-top:6px;padding:6px 8px;background:var(--red-bg);color:var(--red);border-radius:3px;font-size:10px;font-weight:700">
+          ⚠ Benchmark base (${dg.QQQ.baseDate}) is ${Math.round(gapDays)} days from the anchor (${dg.QQQ.anchor}) — this return is NOT trustworthy.
+        </div>`;
+      }
+    }
+
+    if (diagParts.length || warn) {
+      statsEl.innerHTML += `${warn}<div style="width:100%;margin-top:8px;font-size:9px;color:var(--dim);font-family:'IBM Plex Mono',monospace;border-top:1px solid var(--border);padding-top:6px">🔎 ${diagParts.join(' &nbsp;|&nbsp; ')} &nbsp;|&nbsp; build ${BUILD_ID}</div>`;
     }
 
   } catch(e) {
