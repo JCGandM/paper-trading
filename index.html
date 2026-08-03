@@ -2714,7 +2714,7 @@ async function loadChart(period) {
     }
 
     // Portfolio risk cards — vol + correlation vs benchmarks
-    computeRiskMetrics().then(rm => {
+    computeRiskAnalytics().then(rm => {
       const el = document.getElementById('chart-stats');
       if (!el || document.getElementById('risk-cards')) return;
       const f = (v, suf) => (v == null || isNaN(v)) ? '—' : v.toFixed(2) + (suf || '');
@@ -2880,7 +2880,7 @@ const RISK_TTL = 15 * 60 * 1000;
 
 // Returns { volBySym:{sym:{v1m,v3m}}, portVol1m, portVol3m, corrSPY, corrQQQ }
 // All vols are ANNUALISED percentages (stdev of daily returns x sqrt(252) x 100).
-async function computeRiskMetrics(symbols) {
+async function computeRiskAnalytics(symbols) {
   const syms = (symbols && symbols.length) ? symbols : positions.map(p => p.symbol);
   const key = syms.slice().sort().join(',');
   if (riskCache && riskCache.key === key && (Date.now() - riskCache.ts) < RISK_TTL) return riskCache.data;
@@ -3129,7 +3129,7 @@ async function exportExcel() {
   let volBySym = {}, corrSPY = null, corrQQQ = null;
   const realizedBySym = {};
   try {
-    const rm = await computeRiskMetrics(positions.map(p => p.symbol));
+    const rm = await computeRiskAnalytics(positions.map(p => p.symbol));
     volBySym = rm.volBySym; corrSPY = rm.corrSPY; corrQQQ = rm.corrQQQ;
     const allFills = await fetchAllFills();
     Object.assign(realizedBySym, computeRealizedFIFO(allFills));
@@ -4817,7 +4817,7 @@ function renderPnLByName(realizedBySymbol) {
   const setCard = (id, val) => {
     const el = document.getElementById(id);
     if (!el) return;
-    el.textContent = (val >= 0 ? '+' : '') + $$(md(val), true);
+    el.textContent = $$(md(val), true);
     el.style.color = val >= 0 ? 'var(--green)' : 'var(--red)';
   };
   setCard('pnl-realized-total', totRealized);
@@ -4857,7 +4857,7 @@ async function renderRiskTable(force) {
   if (force) riskCache = null;
   body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--dim);padding:16px">Computing…</td></tr>';
   try {
-    const rm = await computeRiskMetrics(positions.map(p => p.symbol));
+    const rm = await computeRiskAnalytics(positions.map(p => p.symbol));
     const pv = parseFloat(account.portfolio_value || 0) + getSplitEquityDelta();
     const f = (v, suf) => (v == null || isNaN(v)) ? '—' : v.toFixed(2) + (suf || '');
 
