@@ -1249,6 +1249,19 @@ function scheduleNextRefresh() {
 let fullRefreshCount = 0;
 let todayRealizedPL = 0;  // realized P&L from positions closed/trimmed today (real $, pre-md)
 
+// SINGLE SOURCE OF TRUTH for day P&L (raw dollars, pre-multiplier).
+// Sum of each position's split-corrected intraday P&L, plus anything realized
+// today. Do NOT use (equity - last_equity): last_equity lags a day and the
+// changing split correction contaminates it — that mismatch is why the Excel
+// export showed yesterday's number while the UI showed today's.
+function computeDayPL() {
+  const unrealizedIntraday = positions.reduce((sum, rawP) => {
+    const ap = getSplitAdjustedPosition(rawP);
+    return sum + parseFloat(ap.unrealized_intraday_pl || 0);
+  }, 0);
+  return unrealizedIntraday + (todayRealizedPL || 0);
+}
+
 // Compute realized P&L from today's sell fills using FIFO against recent buys.
 // Kept lightweight: only fetches today's activities, runs on full refreshes.
 async function computeTodayRealized() {
@@ -1348,12 +1361,7 @@ function renderAccount() {
   // (equity − last_equity). The equity identity gets contaminated by the changing
   // split correction and by intraday deposits/trades, which inflated the number.
   // Summing per-position intraday P&L is what you get eyeballing the Day P&L column.
-  const unrealizedIntraday = positions.reduce((sum, rawP) => {
-    const ap = getSplitAdjustedPosition(rawP);
-    return sum + parseFloat(ap.unrealized_intraday_pl || 0);
-  }, 0);
-  // Add realized P&L from positions closed/trimmed today (not in current positions)
-  const dpl      = unrealizedIntraday + (todayRealizedPL || 0);
+  const dpl      = computeDayPL();   // shared with the Excel export
   const dplPct   = leq ? (dpl / leq * 100) : 0;
 
   document.getElementById('v-pv').textContent   = $$(md(pv));
@@ -2113,7 +2121,9 @@ function takeSnap(source = 'auto') {
   const cash = parseFloat(account.cash || 0);
   const lmv  = parseFloat(account.long_market_value || 0) + getSplitEquityDelta();
   const smv  = parseFloat(account.short_market_value || 0);
-  const dpl  = eq - leq;
+  // Use the shared day-P&L calculation (falls back to the equity delta only if
+  // positions haven't loaded yet, e.g. a snapshot taken very early).
+  const dpl  = positions.length ? computeDayPL() : (eq - leq);
   const dplPct = leq ? (dpl / leq * 100) : 0;
   const totalRet = eq - STARTING_EQUITY;
   const totalRetPct = STARTING_EQUITY ? (totalRet / STARTING_EQUITY * 100) : 0;
@@ -3056,6 +3066,8 @@ async function writeWorkbookWithPageSetup(wb, filename) {
 }
 
 async function exportExcel() {
+  // Refresh today's realized P&L so the export matches what the UI is showing
+  try { await computeTodayRealized(); } catch(e) { /* keep last known */ }
   try {
   const XL = window.XLSX;
   if (!XL) { alert('Excel library not loaded yet. Please wait a moment and try again.'); return; }
@@ -3067,7 +3079,7 @@ async function exportExcel() {
   const pv  = md(parseFloat(account.portfolio_value || 0) + splitDelta);
   const eq  = md(account._correctedEquity || (parseFloat(account.equity || 0) + splitDelta));
   const leq = md(parseFloat(account.last_equity || account.equity || 0) + splitDelta);
-  const dpl = eq - leq;
+  const dpl = md(computeDayPL());   // same calculation the UI shows
   const lmv = md(parseFloat(account.long_market_value || 0) + splitDelta);
   const smv = md(parseFloat(account.short_market_value || 0));
   const invested = lmv + Math.abs(smv);
