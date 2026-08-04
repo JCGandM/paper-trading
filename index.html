@@ -7,6 +7,7 @@
 <title>PaperPort — Alpaca Paper Trading</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style/dist/xlsx.bundle.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
 
@@ -2531,6 +2532,18 @@ function tsTradingDate(ts) {
   return new Date(ts * 1000 - 1000).toISOString().split('T')[0];
 }
 
+// ── Shares outstanding, for Market Cap = shares x live price ────────────
+// Alpaca provides no fundamentals, so this table is the source. Values are
+// approximate diluted share counts and drift with buybacks/issuance — edit a
+// number here (or add a ticker) and the Mkt Cap column updates automatically.
+// Unknown tickers render as "—" rather than a wrong number.
+const SHARES_OUTSTANDING = {
+  AMD:   1.62e9,   AMZN: 10.70e9,  ARM:   1.05e9,  BKNG: 822.5e6,   // post 25:1 split
+  GOOGL: 12.10e9,  HOOD:  0.88e9,  MELI:  50.7e6,  META:   2.52e9,
+  MSFT:   7.43e9,  MU:    1.12e9,  NVDA: 24.40e9,  RDDT:   0.19e9,
+  SPOT:   0.203e9, TSM:   5.19e9,  UBER:  2.09e9,
+};
+
 const splitBarCache = {};  // key: "SYMBOL_timeframe_startDate" → { bars: {date→price}, ts }
 const SPLIT_BAR_TTL = 60 * 60 * 1000;
 
@@ -3003,6 +3016,45 @@ async function computeRiskAnalytics(symbols) {
   return out;
 }
 
+// SheetJS can't write <pageSetup>, so generate the file then patch the sheet XML:
+// landscape, legal (paperSize 5), fit-to-one-page-wide. Falls back to a normal
+// download if JSZip is unavailable, so export never breaks.
+async function writeWorkbookWithPageSetup(wb, filename) {
+  const XL = window.XLSX;
+  try {
+    if (typeof JSZip === 'undefined') throw new Error('JSZip unavailable');
+    const buf  = XL.write(wb, { bookType: 'xlsx', type: 'array' });
+    const zip  = await JSZip.loadAsync(buf);
+    const path = 'xl/worksheets/sheet1.xml';           // Report is the first sheet
+    let xml = await zip.file(path).async('string');
+    // fitToPage lives in <sheetPr>, which must be the first child of <worksheet>
+    if (!/<sheetPr/.test(xml)) {
+      xml = xml.replace(/(<worksheet[^>]*>)/, '$1<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>');
+    } else if (!/pageSetUpPr/.test(xml)) {
+      xml = xml.replace(/(<sheetPr[^>]*)>/, '$1><pageSetUpPr fitToPage="1"/>');
+    }
+    // <pageSetup> must follow <pageMargins>
+    if (/<pageMargins[^>]*\/>/.test(xml)) {
+      xml = xml.replace(/(<pageMargins[^>]*\/>)/,
+        '$1<pageSetup paperSize="5" orientation="landscape" fitToWidth="1" fitToHeight="0"/>');
+    } else {
+      xml = xml.replace(/<\/worksheet>/,
+        '<pageMargins left="0.5" right="0.5" top="0.5" bottom="0.5" header="0.3" footer="0.3"/>' +
+        '<pageSetup paperSize="5" orientation="landscape" fitToWidth="1" fitToHeight="0"/></worksheet>');
+    }
+    zip.file(path, xml);
+    const blob = await zip.generateAsync({ type: 'blob',
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+    document.body.removeChild(a); setTimeout(() => URL.revokeObjectURL(url), 2000);
+  } catch(e) {
+    console.warn('page-setup patch skipped:', e && e.message);
+    XL.writeFile(wb, filename);   // still delivers the workbook
+  }
+}
+
 async function exportExcel() {
   try {
   const XL = window.XLSX;
@@ -3060,6 +3112,9 @@ async function exportExcel() {
   }
 
   // Style presets
+  // Empty cells that carry a banner fill, so the dark bar spans multiple columns
+  function titleFill()   { return s('', { fill: { fgColor: { rgb: C.navy  } } }); }
+  function sectionFill() { return s('', { fill: { fgColor: { rgb: C.navy2 } } }); }
   function title(v) {
     return s(v, { font: { bold: true, color: { rgb: C.white }, sz: 13 }, fill: { fgColor: { rgb: C.navy } }, alignment: { horizontal: 'left' } });
   }
@@ -3073,6 +3128,17 @@ async function exportExcel() {
   function formulaPct(f) {
     return { t: 'n', f: f, z: '0.00%',
              s: { font: { bold: true }, alignment: { horizontal: 'right' } } };
+  }
+  // Report tab uses BLACK for P&L / returns (easier to read); other sheets keep
+  // the green/red convention.
+  function rPl(v)    { return s(v, { font: { color: { rgb: C.text } }, alignment: { horizontal: 'right' } }, '$#,##0.0'); }
+  function rPlPct(v) { return s(v / 100, { font: { color: { rgb: C.text } }, alignment: { horizontal: 'right' } }, '0.00%'); }
+  function rMoney(v) { return s(Math.round(v), { font: { color: { rgb: C.text } }, alignment: { horizontal: 'right' } }, '$#,##0'); }
+  function mktCapCell(sym, price) {
+    const so = SHARES_OUTSTANDING[sym];
+    if (!so || !price || isNaN(price)) return tx('—');
+    // Real company market cap — NOT scaled by the display multiplier.
+    return s(so * price, { font: { color: { rgb: C.text } }, alignment: { horizontal: 'right' } }, '$#,##0.0,,,"B"');
   }
   function corrCell(v) {
     if (v == null || isNaN(v)) return tx('—');
@@ -3188,29 +3254,28 @@ async function exportExcel() {
   // SHEET 1 — Report
   // ════════════════════════════════════════════════════════
   const repRows = [
-    [title('PaperPort — Alpaca Paper Trading Report')],
+    [title('PaperPort — Alpaca Paper Trading Report'), titleFill(), titleFill(), titleFill()],
     [tx('Generated:'), tx(now)],
     [tx('Account ID:'), tx(account.id || '')],
     [tx('Portfolio Start Date'), dateCell(inceptionDt + 'T00:00:00')],
     [],
-    [sectionHdr('ACCOUNT SUMMARY')],
+    [sectionHdr('ACCOUNT SUMMARY'), sectionFill()],
     [hdr10('Metric'), hdr10('Value'), null, hdr10('Benchmark'), hdr10('Return'), hdr10('Alpha'), hdr10('Correlation')],
     [tx('Portfolio Value'),        curr(pv)],
     [tx('Cash'),                   curr(md(parseFloat(account.cash||0)))],
     [tx('Buying Power'),           curr(md(getEffectiveBP()))],
     [tx('Invested (Market Value)'),curr(invested)],
     [tx('% Invested'),             pct(pv ? invested/pv*100 : 0)],
-    [tx('Day P&L ($)'),            plCell(dpl)],
-    [tx('Day P&L (%)'),            plPctCell(leq ? dpl/leq*100 : 0), null,
+    [tx('Day P&L ($)'),            rPl(dpl)],
+    [tx('Day P&L (%)'),            rPlPct(leq ? dpl/leq*100 : 0), null,
      hdr(`SPY (since ${inceptionDt})`),
-     spyRetForReport != null ? plPctCell(spyRetForReport) : tx('—'),
+     spyRetForReport != null ? rPlPct(spyRetForReport) : tx('—'),
      formulaPct('$B$16-E14'), corrCell(corrSPY)],
-    [tx('Total Return ($)'),       plCell(totalRet), null,
+    [tx('Total Return ($)'),       rPl(totalRet), null,
      hdr(`QQQ (since ${inceptionDt})`),
-     qqqRetForReport != null ? plPctCell(qqqRetForReport) : tx('—'),
+     qqqRetForReport != null ? rPlPct(qqqRetForReport) : tx('—'),
      formulaPct('$B$16-E15'), corrCell(corrQQQ)],
-    [tx('Total Return (%)'),       plPctCell(STARTING_EQUITY ? totalRet/STARTING_EQUITY*100 : 0)],
-    [tx('Day Trades Used'),        num(account.daytrade_count||0)],
+    [tx('Total Return (%)'),       rPlPct(STARTING_EQUITY ? totalRet/STARTING_EQUITY*100 : 0)],
     [],
     [sectionHdr('OPEN POSITIONS')],
     [hdr10('Ticker'),hdr10('Conv'),hdr10('Top Idea'),hdr10('Least Fav'),
@@ -3218,7 +3283,7 @@ async function exportExcel() {
      hdr10('Mkt Value'),hdr10('Cost Basis'),
      hdr10('Unrealized P&L'),hdr10('Unrealized %'),
      hdr10('Realized P&L'),hdr10('Total P&L'),hdr10('Day %'),
-     hdr10('1 Month Vol'),hdr10('3 Month Vol')],
+     hdr10('1 Month Vol'),hdr10('3 Month Vol'),hdr10('Mkt Cap')],
     ...positions.map(p => {
       const ap = getSplitAdjustedPosition(p);
       const mv = md(parseFloat(ap.market_value));
@@ -3232,8 +3297,7 @@ async function exportExcel() {
       const realRaw  = realizedBySym[ap.symbol] || 0;      // raw $, FIFO
       const totalRaw = unrRaw + realRaw;                    // raw $
       const vol      = volBySym[ap.symbol] || {};
-      const money = (raw, disp) => s(Math.round(disp),
-        { font: { color: { rgb: raw >= 0 ? C.green : C.red } }, alignment: { horizontal: 'right' } }, '$#,##0');
+      const money = (raw, disp) => rMoney(disp);
       return [
         tx(ap.symbol + (ap._splitMult > 1 ? ` (${ap._splitMult}:1)` : '')),
         tx(meta.conviction || ''),
@@ -3247,12 +3311,13 @@ async function exportExcel() {
         num(Math.round(mv), '$#,##0'),
         num(Math.round(md(parseFloat(ap.cost_basis))), '$#,##0'),
         money(unrRaw,   md(unrRaw)),
-        plPctCell(parseFloat(ap.unrealized_plpc)*100),
+        rPlPct(parseFloat(ap.unrealized_plpc)*100),
         money(realRaw,  md(realRaw)),
         money(totalRaw, md(totalRaw)),
-        plPctCell(parseFloat(ap.unrealized_intraday_plpc)*100),
+        rPlPct(parseFloat(ap.unrealized_intraday_plpc)*100),
         volCell(vol.v1m),
         volCell(vol.v3m),
+        mktCapCell(ap.symbol, parseFloat(ap.current_price)),
       ];
     }),
   ];
@@ -3294,7 +3359,7 @@ async function exportExcel() {
     : s('⚠ COMPLIANCE ISSUES FOUND', { font: { bold: true, color: { rgb: C.red }, sz: 11 }, alignment: { horizontal: 'left' } });
 
   repRows.push([], [], []);   // 3 blank rows after Open Positions
-  repRows.push([sectionHdr('REQUIRED PARAMETERS — COMPLIANCE CHECK'), null, null, null, null, overallCell]);
+  repRows.push([sectionHdr('REQUIRED PARAMETERS — COMPLIANCE CHECK'), sectionFill(), sectionFill(), sectionFill(), null, overallCell]);
   repRows.push([hdr('Parameter'), hdr('Requirement'), hdr('Current Value'), hdr('Status')]);
   compRules.forEach(r => repRows.push([
     s(r.param, { font: { bold: true, color: { rgb: '111111' } }, fill: { fgColor: { rgb: 'F2F4F6' } } }),
@@ -3303,7 +3368,14 @@ async function exportExcel() {
     r.pass ? passCell('PASS') : failCell('FAIL'),
   ]));
 
-  appendSheet(repRows, 'Report', [16,7,9,9,9,9,11,10,8,12,12,13,11,12,12,8,11,11]);
+  const reportLastRow = repRows.length;   // print area grows with the position count
+  appendSheet(repRows, 'Report', [16,7,9,9,9,9,11,10,8,12,12,13,11,12,12,8,11,11,12]);
+  // Margins (SheetJS writes these directly)
+  wb.Sheets['Report']['!margins'] = { left:0.5, right:0.5, top:0.5, bottom:0.5, header:0.3, footer:0.3 };
+  // Print area — a workbook-level defined name
+  wb.Workbook = wb.Workbook || {};
+  wb.Workbook.Names = (wb.Workbook.Names || []).filter(n => n.Name !== '_xlnm.Print_Area');
+  wb.Workbook.Names.push({ Name: '_xlnm.Print_Area', Ref: `'Report'!$A$1:$S$${reportLastRow}`, Sheet: 0 });
 
   // ════════════════════════════════════════════════════════
   // SHEET 2 — Trade Log (grouped by ticker)
@@ -3633,7 +3705,7 @@ async function exportExcel() {
     console.error('P&L by Name sheet skipped:', e.message);
   }
 
-  XL.writeFile(wb, `paperport-${dt}.xlsx`);
+  await writeWorkbookWithPageSetup(wb, `paperport-${dt}.xlsx`);
   } catch(e) {
     console.error('Excel export error:', e);
     alert('Excel export failed: ' + e.message);
